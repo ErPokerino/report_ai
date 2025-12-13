@@ -1,0 +1,43 @@
+project:
+  type: default
+
+format:
+  html:
+    theme: cosmo
+    code-fold: true
+    toc: true
+    number-sections: true
+    css: ../styles.css
+  pdf:
+    documentclass: article
+    geometry:
+      - top=30mm
+      - left=20mm
+      - right=20mm
+      - bottom=30mm
+      - heightrounded
+    fig-dpi: 300
+    keep-tex: false
+    colorlinks: true
+    linestretch: 1.2
+    fontsize: 11pt
+    fig-pos: "H"
+    include-in-header:
+      text: |
+        \usepackage{wrapfig}
+        \usepackage{float}
+        \sloppy
+        \emergencystretch=3em
+  revealjs:
+    theme: dark
+    transition: slide
+    code-fold: true
+    toc: true
+
+execute:
+  echo: false
+  warning: false
+  freeze: auto
+
+jupyter: python3
+

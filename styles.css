@@ -1,0 +1,29 @@
+body {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.cell-output {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+pre, code {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Assicura che le immagini non vadano fuori pagina */
+img, figure {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Gestione tabelle */
+table {
+  width: 100%;
+  table-layout: auto;
+  word-wrap: break-word;
+}
+

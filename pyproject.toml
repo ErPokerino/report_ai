@@ -1,0 +1,23 @@
+[project]
+name = "quarto"
+version = "0.1.0"
+description = "Sistema di reportistica automatica con Quarto e AI"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "plotly>=5.14.0",
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langgraph>=0.0.20",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.25.0",
+    "nbformat>=5.0.0",
+    "python-dotenv>=1.0.0",
+    "scikit-learn>=1.3.0",
+    "tabulate>=0.9.0",
+    "pypdf>=3.0.0",
+    "jupyter-cache>=1.0.1",
+]
