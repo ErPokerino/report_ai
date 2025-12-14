@@ -44,7 +44,7 @@ print(intro_text)
 import sys
 sys.path.append('../src')
 
-from data_loader import load_csv_data, calculate_metrics_by_method, get_field_names, filter_by_field_name
+from data_loader import load_csv_data, calculate_metrics_by_method, get_field_names, filter_by_field_name, calculate_percentage
 from table_formatter import format_table, format_summary_dict
 import pandas as pd
 from IPython.display import Markdown, display
@@ -83,18 +83,13 @@ if 'field_name' in df.columns:
             'field_name': fn,
             'Totale record': len(field_df),
             'Validati': field_df['is_validated'].sum(),
-            '% Validati': f"{field_df['is_validated'].sum()/len(field_df)*100:.1f}%" if len(field_df) > 0 else "0%",
+            '% Validati': f"{calculate_percentage(field_df['is_validated'].sum(), len(field_df), decimal_places=1):.1f}%" if len(field_df) > 0 else "0%",
             'Metodi utilizzati': field_df['method_pred'].nunique() if 'method_pred' in field_df.columns else 0
         })
     
     field_stats_df = pd.DataFrame(field_stats)
     result = format_table(field_stats_df, "Distribuzione e Statistiche per Campo (field_name)", return_string=True)
     print(result)
-    
-    # Grafico distribuzione
-    from lucy_visualizations import plot_field_name_distribution
-    fig = plot_field_name_distribution(df)
-    display(fig)
 
 # Prime righe
 result = format_table(df.head(), "Prime righe del dataset", return_string=True)
@@ -213,7 +208,7 @@ except Exception as e:
     method_usage_commentary = None
 
 if method_usage_commentary:
-    print(f"**Commento AI:** {method_usage_commentary}")
+    display(Markdown(f"**Commento AI:** {method_usage_commentary}"))
 ```
 
 ### Timeline Predizioni
@@ -275,11 +270,11 @@ if timeline_commentary:
 #| echo: false
 #| code-fold: true
 
-from data_loader import get_field_names, filter_by_field_name, calculate_metrics_by_method
+from data_loader import get_field_names, filter_by_field_name, calculate_metrics_by_method, calculate_percentage
 from lucy_visualizations import plot_metrics_by_method, plot_confusion_matrix_by_method
 from ai_analysis import analyze_data_summary, generate_chart_commentary
 from table_formatter import format_table
-from IPython.display import Markdown, display
+from IPython.display import Markdown, display, HTML
 import os
 
 # Ottieni tutti i field_name
@@ -292,12 +287,12 @@ for field_name in field_names:
     if len(field_df) == 0:
         continue
     
-    print(f"### Analisi: {field_name}")
+    display(Markdown(f"### Analisi: {field_name}"))
     
     # Statistiche per questo campo
     field_summary = {
         'Totale record': f"{len(field_df):,}",
-        'Record validati': f"{field_df['is_validated'].sum():,} ({field_df['is_validated'].sum()/len(field_df)*100:.1f}%)" if len(field_df) > 0 else "0",
+        'Record validati': f"{field_df['is_validated'].sum():,} ({calculate_percentage(field_df['is_validated'].sum(), len(field_df), decimal_places=1):.1f}%)" if len(field_df) > 0 else "0",
         'Metodi utilizzati': f"{field_df['method_pred'].nunique()}" if 'method_pred' in field_df.columns else "0"
     }
     display(format_summary_dict(field_summary, f"Statistiche per {field_name}"))
@@ -338,11 +333,12 @@ for field_name in field_names:
         if enable_ai and os.getenv("OPENAI_API_KEY"):
             field_ai_summary = analyze_data_summary(field_df, field_name=field_name)
             if field_ai_summary:
-                print(f"**Analisi AI per {field_name}:**\n\n{field_ai_summary}")
+                display(Markdown(f"**Analisi AI per {field_name}:**\n\n{field_ai_summary}"))
     except Exception:
         pass
     
-    print("---")
+    # Separatore orizzontale (usando HTML invece di markdown per evitare conflitti YAML)
+    display(HTML("<hr>"))
 ```
 
 ## Performance Metodi
@@ -427,7 +423,7 @@ except Exception as e:
     metrics_commentary = None
 
 if metrics_commentary:
-    print(f"**Commento AI:** {metrics_commentary}")
+    display(Markdown(f"**Commento AI:** {metrics_commentary}"))
 ```
 
 ### Confronto ML vs Query-based
@@ -589,7 +585,7 @@ except Exception as e:
     confusion_commentary = None
 
 if confusion_commentary:
-    print(f"**Commento AI:** {confusion_commentary}")
+    display(Markdown(f"**Commento AI:** {confusion_commentary}"))
 ```
 
 ### Analisi Pattern di Errore
@@ -687,7 +683,7 @@ except Exception as e:
     confidence_commentary = None
 
 if confidence_commentary:
-    print(f"**Commento AI:** {confidence_commentary}")
+    display(Markdown(f"**Commento AI:** {confidence_commentary}"))
 ```
 
 ## Analisi Geografica
@@ -821,6 +817,8 @@ except Exception as e:
 #| code-fold: true
 #| output: asis
 
+from IPython.display import Markdown, display
+
 if recommendations:
-    print("### Raccomandazioni\n\n" + recommendations)
+    display(Markdown("### Raccomandazioni\n\n" + recommendations))
 ```

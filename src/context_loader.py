@@ -4,8 +4,26 @@ Supporta PDF e Markdown, estraendo sezioni rilevanti per il contesto del LLM.
 """
 import os
 import re
+import logging
+import sys
 from pathlib import Path
 from typing import List, Dict, Optional
+
+# Configurazione logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logger = logging.getLogger(__name__)
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+# Se non ci sono handler, aggiungine uno
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 try:
     from pypdf import PdfReader
@@ -38,6 +56,7 @@ def extract_text_from_pdf(pdf_path: Path) -> str:
         
         return "\n\n".join(text_parts)
     except Exception as e:
+        logger.error(f"Errore nell'estrazione del PDF {pdf_path.name}: {e}")
         return f"[ERRORE nell'estrazione del PDF {pdf_path.name}: {str(e)}]"
 
 
@@ -55,6 +74,7 @@ def extract_text_from_markdown(md_path: Path) -> str:
         with open(md_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
+        logger.error(f"Errore nella lettura del file Markdown {md_path.name}: {e}")
         return f"[ERRORE nella lettura del file {md_path.name}: {str(e)}]"
 
 
@@ -224,6 +244,7 @@ def load_context_files(context_dir: str = "context",
             
             except Exception as e:
                 # Continua con altri file anche se uno fallisce
+                logger.warning(f"Errore durante il caricamento del file {file_name}: {e}. Continuo con altri file.")
                 continue
     
     return "\n".join(context_parts)

@@ -10,32 +10,68 @@ import sys
 from typing import Dict, List, Optional, Any, Union
 from openai import RateLimitError
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import logging
+
+# Importa funzione helper per calcolo percentuali
+try:
+    from .data_loader import calculate_percentage
+except ImportError:
+    # Fallback per quando eseguito da notebook
+    from data_loader import calculate_percentage
 
 # Carica variabili d'ambiente da .env
 load_dotenv()
+
+# Configurazione logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logger = logging.getLogger(__name__)
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+# Se non ci sono handler, aggiungine uno
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # Timeout per le chiamate API (in secondi) - configurabile via variabile d'ambiente
 API_TIMEOUT_SECONDS = int(os.getenv("LLM_API_TIMEOUT", "60"))
 
 # Costanti
 GEMINI_MODEL = "gemini-3-pro-preview"
+GEMINI_FLASH_MODEL = "gemini-2.5-flash"
 DEFAULT_MODEL = "gpt-5.2"
 DEFAULT_TEMPERATURE = 0
 
 # Importa il modulo per caricare il contesto
+# Prova prima import relativo, poi assoluto per compatibilità con notebook Quarto
+CONTEXT_LOADER_AVAILABLE = False
 try:
-    from context_loader import get_context_for_analysis
+    # Prova import relativo (quando eseguito come modulo)
+    from .context_loader import get_context_for_analysis
     CONTEXT_LOADER_AVAILABLE = True
-except ImportError:
-    CONTEXT_LOADER_AVAILABLE = False
-    def get_context_for_analysis(analysis_type: str = "general", field_name: Optional[str] = None) -> str:
-        return ""
+except ImportError as e:
+    try:
+        # Fallback a import assoluto (quando eseguito da notebook)
+        from context_loader import get_context_for_analysis
+        CONTEXT_LOADER_AVAILABLE = True
+    except ImportError as e2:
+        # Se entrambi falliscono, usa funzione stub
+        logger.warning(f"Impossibile importare context_loader: {e2}. Funzionalità di contesto disabilitata.")
+        CONTEXT_LOADER_AVAILABLE = False
+        def get_context_for_analysis(analysis_type: str = "general", field_name: Optional[str] = None) -> str:
+            return ""
 
 # Importa Gemini se disponibile
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
     GEMINI_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    logger.debug(f"langchain-google-genai non disponibile: {e}. Supporto Gemini disabilitato.")
     GEMINI_AVAILABLE = False
 
 
@@ -59,6 +95,7 @@ def get_model_display_name(model_name: Optional[str]) -> str:
         "gpt-4": "GPT-4",
         "gemini-3-pro-preview": "Gemini 3 PRO",
         "gemini-3-pro": "Gemini 3 PRO",
+        "gemini-2.5-flash": "Gemini Flash 2.5",
     }
     return model_map.get(model_name, model_name.upper().replace("-", " "))
 
@@ -87,7 +124,7 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
     """
     Inizializza LLM con fallback a modelli alternativi se quota esaurita.
     
-    Ordine di fallback: gpt-5.2 -> gpt-4o -> gpt-4-turbo -> gpt-4 -> gemini-3-pro-preview
+    Ordine di fallback: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash -> gpt-4o
     
     Args:
         primary_model: Modello principale da provare (default: gpt-5.2)
@@ -103,35 +140,40 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
     if (not openai_api_key or openai_api_key.strip() == "") and (not google_api_key or google_api_key.strip() == ""):
         return None
     
-    # Ordine di fallback: prioritario gpt-5.2, poi modelli alternativi OpenAI, poi Gemini
-    fallback_models = ["gpt-5.2", "gpt-4o", "gpt-4-turbo", "gpt-4"]
+    # Ordine di fallback richiesto: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash -> gpt-4o
+    fallback_models = ["gpt-5.2"]
+    
+    # Aggiungi Gemini se disponibile
+    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+        fallback_models.append(GEMINI_MODEL)
+        fallback_models.append(GEMINI_FLASH_MODEL)
+    
+    # Aggiungi GPT-4o
+    fallback_models.append("gpt-4o")
     
     # Se il modello primario non è nella lista, aggiungilo all'inizio
     if primary_model not in fallback_models:
         fallback_models.insert(0, primary_model)
     else:
         # Riordina per avere primary_model come primo
-        fallback_models.remove(primary_model)
+        if primary_model in fallback_models:
+            fallback_models.remove(primary_model)
         fallback_models.insert(0, primary_model)
     
-    # Aggiungi Gemini come ultimo fallback se disponibile
-    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
-        fallback_models.append(GEMINI_MODEL)
-    
-    # Prova ogni modello OpenAI in ordine
-    if openai_api_key and openai_api_key.strip() != "":
-        for model in fallback_models:
-            if model == GEMINI_MODEL:
-                continue  # Salta Gemini qui, lo gestiamo dopo
+    # Prova ogni modello nell'ordine specificato
+    for model in fallback_models:
+        # Determina se è un modello OpenAI o Gemini
+        is_gemini = model == GEMINI_MODEL or model == GEMINI_FLASH_MODEL
+        
+        # Prova OpenAI
+        if not is_gemini and openai_api_key and openai_api_key.strip() != "":
             try:
-                # Prova a inizializzare il modello OpenAI con timeout
                 llm = ChatOpenAI(
                     model=model,
                     temperature=temperature,
                     api_key=openai_api_key,
                     timeout=API_TIMEOUT_SECONDS
                 )
-                # Se l'inizializzazione riesce, restituisci la configurazione
                 return {
                     "model_name": model, 
                     "temperature": temperature, 
@@ -140,33 +182,32 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
                     "fallback_models": fallback_models,
                     "provider": "openai"
                 }
-            except RateLimitError:
-                # Se quota esaurita, prova il modello successivo
+            except RateLimitError as e:
+                logger.debug(f"RateLimitError per modello {model}: {e}. Provo modello successivo.")
                 continue
-            except Exception:
-                # Per altri errori, prova comunque il modello successivo
+            except Exception as e:
+                logger.debug(f"Errore inizializzazione modello {model}: {e}. Provo modello successivo.")
                 continue
-    
-    # Se tutti i modelli OpenAI falliscono, prova Gemini
-    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
-        try:
-            # Prova a inizializzare Gemini
-            llm = ChatGoogleGenerativeAI(
-                model=GEMINI_MODEL,
-                temperature=temperature,
-                google_api_key=google_api_key
-            )
-            return {
-                "model_name": GEMINI_MODEL, 
-                "temperature": temperature, 
-                "api_key": google_api_key, 
-                "llm": llm, 
-                "fallback_models": fallback_models,
-                "provider": "google"
-            }
-        except Exception:
-            # Se anche Gemini fallisce, continua
-            pass
+        
+        # Prova Gemini
+        elif is_gemini and GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+            try:
+                llm = ChatGoogleGenerativeAI(
+                    model=model,
+                    temperature=temperature,
+                    google_api_key=google_api_key
+                )
+                return {
+                    "model_name": model, 
+                    "temperature": temperature, 
+                    "api_key": google_api_key, 
+                    "llm": llm, 
+                    "fallback_models": fallback_models,
+                    "provider": "google"
+                }
+            except Exception as e:
+                logger.debug(f"Errore inizializzazione {model}: {e}. Provo modello successivo.")
+                continue
     
     # Se tutti i modelli falliscono, restituisci None
     return None
@@ -272,7 +313,7 @@ def _invoke_with_timeout(llm: Any, messages: List[HumanMessage], timeout_seconds
         try:
             return future.result(timeout=timeout_seconds)
         except FuturesTimeoutError:
-            print(f"ATTENZIONE: Timeout dopo {timeout_seconds} secondi per la chiamata LLM", file=sys.stderr)
+            logger.warning(f"Timeout dopo {timeout_seconds} secondi per la chiamata LLM")
             raise
 
 
@@ -298,12 +339,15 @@ def _try_fallback_models(
     Returns:
         Risposta LLM o None se tutti i modelli falliscono
     """
-    # Prova modelli OpenAI successivi
-    if openai_api_key and openai_api_key.strip() != "":
-        for model in fallback_models[current_index + 1:]:
-            if model == GEMINI_MODEL:
-                continue  # Salta Gemini qui
+    # Prova modelli successivi nell'ordine specificato
+    for model in fallback_models[current_index + 1:]:
+        # Determina se è un modello OpenAI o Gemini
+        is_gemini = model == GEMINI_MODEL or model == GEMINI_FLASH_MODEL
+        
+        # Prova OpenAI
+        if not is_gemini and openai_api_key and openai_api_key.strip() != "":
             try:
+                logger.debug(f"Tentativo fallback con modello OpenAI: {model}")
                 llm = ChatOpenAI(
                     model=model,
                     temperature=temperature,
@@ -311,24 +355,30 @@ def _try_fallback_models(
                     timeout=API_TIMEOUT_SECONDS
                 )
                 response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+                logger.info(f"Fallback riuscito con modello: {model}")
                 return _extract_text_from_response(response)
-            except (RateLimitError, FuturesTimeoutError):
+            except (RateLimitError, FuturesTimeoutError) as e:
+                logger.debug(f"Errore con modello fallback {model}: {e}. Provo successivo.")
                 continue
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Errore generico con modello fallback {model}: {e}. Provo successivo.")
                 continue
-    
-    # Se tutti i modelli OpenAI falliscono, prova Gemini
-    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
-        try:
-            llm = ChatGoogleGenerativeAI(
-                model=GEMINI_MODEL,
-                temperature=temperature,
-                google_api_key=google_api_key
-            )
-            response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
-            return _extract_text_from_response(response)
-        except Exception:
-            pass
+        
+        # Prova Gemini
+        elif is_gemini and GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+            try:
+                logger.debug(f"Tentativo fallback con Gemini: {model}")
+                llm = ChatGoogleGenerativeAI(
+                    model=model,
+                    temperature=temperature,
+                    google_api_key=google_api_key
+                )
+                response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+                logger.info(f"Fallback riuscito con Gemini: {model}")
+                return _extract_text_from_response(response)
+            except Exception as e:
+                logger.debug(f"Errore con Gemini fallback {model}: {e}. Provo successivo.")
+                continue
     
     return None
 
@@ -351,15 +401,26 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
     llm = llm_config.get("llm")
     fallback_models = llm_config.get("fallback_models", [llm_config["model_name"]])
     provider = llm_config.get("provider", "openai")
-    current_model_index = fallback_models.index(llm_config["model_name"])
+    model_name = llm_config.get("model_name")
+    
+    # Trova l'indice del modello corrente in modo sicuro
+    if model_name in fallback_models:
+        current_model_index = fallback_models.index(model_name)
+    else:
+        # Se il modello non è nella lista, aggiungilo all'inizio e usa indice 0
+        fallback_models.insert(0, model_name)
+        current_model_index = 0
+    
     temperature = llm_config.get("temperature", DEFAULT_TEMPERATURE)
     
     # Prova prima con il modello corrente
     try:
+        logger.debug(f"Invio richiesta LLM con modello: {model_name}")
         response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
         return _extract_text_from_response(response)
-    except (RateLimitError, FuturesTimeoutError):
+    except (RateLimitError, FuturesTimeoutError) as e:
         # Se quota esaurita o timeout, prova fallback
+        logger.warning(f"Errore con modello {model_name}: {e}. Tentativo fallback.")
         return _try_fallback_models(
             fallback_models,
             current_model_index,
@@ -368,9 +429,11 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
             os.getenv("OPENAI_API_KEY"),
             os.getenv("GOOGLE_API_KEY")
         )
-    except Exception:
+    except Exception as e:
         # Altri errori: se è OpenAI, prova fallback; se è già Gemini, restituisci None
+        logger.warning(f"Errore generico con modello {model_name}: {e}")
         if provider == "openai":
+            logger.info("Tentativo fallback per errore OpenAI")
             return _try_fallback_models(
                 fallback_models,
                 current_model_index,
@@ -379,6 +442,7 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
                 os.getenv("OPENAI_API_KEY"),
                 os.getenv("GOOGLE_API_KEY")
             )
+        logger.error(f"Errore con Gemini, nessun fallback disponibile")
         return None
 
 
@@ -418,7 +482,7 @@ def analyze_data_summary(df: pd.DataFrame, field_name: Optional[str] = None) -> 
                 field_count = len(df[df['field_name'] == field_name]) if 'field_name' in df.columns else 0
                 field_validated = len(df[(df['field_name'] == field_name) & (df['is_validated'])]) if 'field_name' in df.columns else 0
                 field_context += f"Record totali per questo campo: {field_count}\n"
-                pct_validated = (field_validated/field_count*100) if field_count > 0 else 0
+                pct_validated = calculate_percentage(field_validated, field_count, decimal_places=1)
                 field_context += f"Record validati per questo campo: {field_validated} ({pct_validated:.1f}%)\n"
             elif 'field_name' in df.columns:
                 field_names = df['field_name'].value_counts().to_string()
@@ -443,7 +507,7 @@ Contesto: Dati di un sistema di riconoscimento automatico di informazioni da fat
 Statistiche descrittive:
 {stats}
 
-Dati validati: {validated_count} su {total_count} ({validated_count/total_count*100:.1f}%)
+Dati validati: {validated_count} su {total_count} ({calculate_percentage(validated_count, total_count, decimal_places=1):.1f}%)
 
 Distribuzione metodi:
 {methods}

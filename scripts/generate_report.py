@@ -4,6 +4,8 @@ Script per la generazione automatica del report Quarto.
 import subprocess
 import sys
 import os
+import re
+import time
 from pathlib import Path
 from typing import Optional, List, Union
 
@@ -11,6 +13,65 @@ from typing import Optional, List, Union
 SUPPORTED_FORMATS = ['html', 'pdf', 'revealjs', 'all']
 DEFAULT_FORMAT = 'html'
 DEFAULT_INPUT = 'reports/report_lucy.qmd'
+
+# Pattern per estrarre informazioni sulle celle da Quarto
+CELL_PATTERN = re.compile(r'Cell\s+(\d+)/(\d+):\s*(.+?)(?:\s+\.\.\.\s+Done)?$', re.IGNORECASE)
+
+
+def format_progress_bar(current: int, total: int, label: str = "", width: int = 50) -> str:
+    """
+    Crea una barra di progresso testuale.
+    
+    Args:
+        current: Valore corrente
+        total: Valore totale
+        label: Etichetta opzionale
+        width: Larghezza della barra in caratteri
+        
+    Returns:
+        Stringa formattata con la barra di progresso
+    """
+    if total == 0:
+        percent = 0
+    else:
+        percent = min(100, int((current / total) * 100))
+    
+    filled = int((current / total) * width) if total > 0 else 0
+    bar = '#' * filled + '-' * (width - filled)
+    
+    label_str = f" | {label}" if label else ""
+    return f"[{bar}] {percent:3d}% ({current}/{total}){label_str}"
+
+
+def update_progress(current: int, total: int, label: str = "", start_time: Optional[float] = None):
+    """
+    Aggiorna e mostra la barra di progresso.
+    
+    Args:
+        current: Valore corrente
+        total: Valore totale
+        label: Etichetta opzionale
+        start_time: Timestamp di inizio per calcolare tempo trascorso
+    """
+    bar = format_progress_bar(current, total, label)
+    
+    if start_time:
+        elapsed = time.time() - start_time
+        if current > 0 and total > 0:
+            estimated_total = elapsed * total / current
+            remaining = estimated_total - elapsed
+            time_str = f" | Tempo: {int(elapsed)}s / ~{int(estimated_total)}s (rimanenti: ~{int(remaining)}s)"
+        else:
+            time_str = f" | Tempo: {int(elapsed)}s"
+    else:
+        time_str = ""
+    
+    # Usa \r per sovrascrivere la riga precedente
+    print(f"\r{bar}{time_str}", end='', flush=True)
+    
+    # Se completato, vai a nuova riga
+    if current >= total:
+        print()
 
 
 def render_quarto_report(
@@ -62,21 +123,67 @@ def render_quarto_report(
             cmd.append('--no-execute')
         
         try:
-            result = subprocess.run(
+            # Usa Popen per leggere output in streaming
+            process = subprocess.Popen(
                 cmd,
-                check=True,
-                capture_output=True,
-                text=True
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
             )
-            print(result.stdout)
-            print(f"OK: Report {fmt} generato con successo!")
-        except subprocess.CalledProcessError as e:
-            print(f"ERRORE: Errore durante il rendering in {fmt}:")
-            if e.stderr:
-                print(e.stderr)
-            if e.stdout:
-                print("Output:", e.stdout)
-            success = False
+            
+            # Variabili per tracciare il progresso
+            current_cell = 0
+            total_cells = 0
+            current_label = ""
+            start_time = time.time()
+            output_lines = []
+            
+            # Leggi output in streaming
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                
+                output_lines.append(line)
+                
+                # Cerca pattern "Cell X/Y: label"
+                match = CELL_PATTERN.search(line)
+                if match:
+                    current_cell = int(match.group(1))
+                    total_cells = int(match.group(2))
+                    current_label = match.group(3).strip()
+                    update_progress(current_cell, total_cells, current_label, start_time)
+                else:
+                    # Stampa altre righe importanti (errori, warning, etc.)
+                    if any(keyword in line.lower() for keyword in ['error', 'warning', 'done', 'complete']):
+                        # Vai a nuova riga per mostrare il messaggio
+                        print()
+                        print(line.rstrip())
+                        # Riprendi la barra di progresso se abbiamo ancora celle
+                        if total_cells > 0:
+                            update_progress(current_cell, total_cells, current_label, start_time)
+            
+            # Attendi che il processo termini
+            return_code = process.wait()
+            
+            # Mostra progresso finale
+            if total_cells > 0:
+                update_progress(total_cells, total_cells, "Completato", start_time)
+            else:
+                # Se non abbiamo trovato pattern di celle, mostra output completo
+                print("\n" + "".join(output_lines))
+            
+            if return_code == 0:
+                elapsed = time.time() - start_time
+                print(f"\n[OK] Report {fmt} generato con successo! (Tempo totale: {int(elapsed)}s)")
+            else:
+                print(f"\n[ERRORE] Errore durante il rendering in {fmt} (codice: {return_code})")
+                print("Output completo:")
+                print("".join(output_lines))
+                success = False
+                
         except FileNotFoundError:
             print("ERRORE: Quarto non trovato. Assicurati che sia installato e nel PATH.")
             print("   Installa Quarto da: https://quarto.org/docs/get-started/")

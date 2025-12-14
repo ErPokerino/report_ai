@@ -8,11 +8,6 @@ format:
     toc: true
     number-sections: true
     css: ../styles.css
-    grid:
-      sidebar-width: 200px
-      body-width: 900px
-      margin-width: 70px
-      gutter-width: 1.5em
   pdf:
     documentclass: article
     geometry:

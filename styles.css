@@ -79,3 +79,41 @@ figure img {
   display: block;
   box-sizing: border-box;
 }
+
+/* Migliorare visualizzazione TOC (Tavola dei Contenuti) */
+.quarto-sidebar {
+  overflow-x: visible;
+  overflow-y: auto;
+  min-width: 280px !important;
+  width: 280px !important;
+}
+
+.quarto-sidebar .toc {
+  font-size: 0.9em;
+  line-height: 1.4;
+  padding-right: 0.5em;
+}
+
+.quarto-sidebar .toc a {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  display: block;
+  padding: 0.25em 0;
+}
+
+.quarto-sidebar .toc ul {
+  padding-left: 1em;
+  margin: 0.5em 0;
+}
+
+.quarto-sidebar .toc li {
+  margin: 0.3em 0;
+  list-style: none;
+}
+
+/* Assicurare che la TOC non venga troncata */
+.quarto-sidebar .sidebar-menu-container {
+  width: 100%;
+  overflow-x: visible;
+}

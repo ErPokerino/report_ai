@@ -13,6 +13,23 @@ METHOD_TYPE_OTHER = 'Other'
 METHOD_TYPE_UNKNOWN = 'Unknown'
 
 
+def calculate_percentage(part: int, total: int, decimal_places: int = 1) -> float:
+    """
+    Calcola percentuale con gestione divisione per zero.
+    
+    Args:
+        part: Parte del totale
+        total: Totale
+        decimal_places: Numero di cifre decimali (default: 1)
+        
+    Returns:
+        Percentuale calcolata, o 0.0 se total è 0
+    """
+    if total == 0:
+        return 0.0
+    return round((part / total) * 100, decimal_places)
+
+
 def _prepare_lucy_base(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepara base dati Lucy (datetime, flags, categorizzazione).
