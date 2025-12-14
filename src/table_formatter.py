@@ -5,7 +5,7 @@ import pandas as pd
 from IPython.display import Markdown, display
 
 
-def format_table(df, caption=None, digits=3):
+def format_table(df, caption=None, digits=3, return_string=False):
     """
     Formatta un DataFrame come tabella Quarto markdown.
     
@@ -13,12 +13,14 @@ def format_table(df, caption=None, digits=3):
         df: DataFrame da formattare
         caption: Caption opzionale per la tabella
         digits: Numero di cifre decimali per valori numerici
+        return_string: Se True, restituisce una stringa invece di Markdown object
         
     Returns:
-        Markdown object da visualizzare
+        Markdown object o stringa da visualizzare
     """
     if df is None or len(df) == 0:
-        return Markdown("*Nessun dato disponibile*")
+        result = "*Nessun dato disponibile*"
+        return result if return_string else Markdown(result)
     
     # Arrotonda valori numerici
     df_formatted = df.copy()
@@ -32,25 +34,26 @@ def format_table(df, caption=None, digits=3):
     if caption:
         markdown_str = f"**{caption}**\n\n{markdown_str}"
     
-    return Markdown(markdown_str)
+    return markdown_str if return_string else Markdown(markdown_str)
 
 
-def format_summary_dict(data_dict, title=None):
+def format_summary_dict(data_dict, title=None, return_string=False):
     """
     Formatta un dizionario di statistiche come tabella.
     
     Args:
         data_dict: Dizionario con chiavi e valori
         title: Titolo opzionale
+        return_string: Se True, restituisce una stringa invece di Markdown object
         
     Returns:
-        Markdown object da visualizzare
+        Markdown object o stringa da visualizzare
     """
     df = pd.DataFrame(list(data_dict.items()), columns=['Metrica', 'Valore'])
     
     if title:
-        return format_table(df, caption=title)
-    return format_table(df)
+        return format_table(df, caption=title, return_string=return_string)
+    return format_table(df, return_string=return_string)
 
 
 def display_table(df, caption=None, digits=3):

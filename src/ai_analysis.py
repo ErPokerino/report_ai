@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 import pandas as pd
 import os
+from openai import RateLimitError
 
 # Carica variabili d'ambiente da .env
 load_dotenv()
@@ -29,13 +30,15 @@ def get_llm(model_name="gpt-5.2", temperature=0):
         temperature: Temperatura per la generazione
         
     Returns:
-        ChatOpenAI: Istanza del modello
+        ChatOpenAI: Istanza del modello, o None se API key non disponibile o errore
     """
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY non trovata nelle variabili d'ambiente")
+    if not api_key or api_key.strip() == "":
+        return None
     
-    return ChatOpenAI(model=model_name, temperature=temperature, api_key=api_key)
+    # Non inizializzare ChatOpenAI qui - fallo solo quando necessario
+    # Questo evita errori durante l'inizializzazione se la quota è esaurita
+    return {"model_name": model_name, "temperature": temperature, "api_key": api_key}
 
 
 def analyze_data_summary(df, field_name=None):
@@ -47,47 +50,55 @@ def analyze_data_summary(df, field_name=None):
         field_name: Nome del campo specifico da analizzare (opzionale)
         
     Returns:
-        str: Riassunto generato dall'AI
+        str: Riassunto generato dall'AI, o None se AI non disponibile
     """
-    llm = get_llm()
+    llm_config = get_llm()
+    if llm_config is None:
+        return "Analisi AI non disponibile (API key non configurata)."
     
-    # Prepara statistiche descrittive
-    stats = df.describe().to_string()
-    shape_info = f"Shape: {df.shape}\nColonne: {', '.join(df.columns.tolist())}"
-    
-    # Controlla se sono dati Lucy
-    is_lucy_data = 'datetime_sent' in df.columns or 'method_pred' in df.columns
-    
-    if is_lucy_data:
-        # Analisi specifica per dati Lucy
-        validated_count = df['is_validated'].sum() if 'is_validated' in df.columns else 0
-        total_count = len(df)
-        methods = df['method_pred'].value_counts().to_string() if 'method_pred' in df.columns else "N/A"
+    try:
+        llm = ChatOpenAI(
+            model=llm_config["model_name"], 
+            temperature=llm_config["temperature"], 
+            api_key=llm_config["api_key"]
+        )
+        # Prepara statistiche descrittive
+        stats = df.describe().to_string()
+        shape_info = f"Shape: {df.shape}\nColonne: {', '.join(df.columns.tolist())}"
         
-        # Aggiungi informazioni su field_name se specificato
-        field_context = ""
-        if field_name:
-            field_context = f"\n\nAnalisi specifica per il campo: **{field_name}**\n"
-            field_count = len(df[df['field_name'] == field_name]) if 'field_name' in df.columns else 0
-            field_validated = len(df[(df['field_name'] == field_name) & (df['is_validated'])]) if 'field_name' in df.columns else 0
-            field_context += f"Record totali per questo campo: {field_count}\n"
-            pct_validated = (field_validated/field_count*100) if field_count > 0 else 0
-            field_context += f"Record validati per questo campo: {field_validated} ({pct_validated:.1f}%)\n"
-        elif 'field_name' in df.columns:
-            field_names = df['field_name'].value_counts().to_string()
-            field_context = f"\n\nDistribuzione campi (field_name):\n{field_names}\n"
+        # Controlla se sono dati Lucy
+        is_lucy_data = 'datetime_sent' in df.columns or 'method_pred' in df.columns
         
-        # Aggiorna il contesto per menzionare tutti i campi, non solo id_subject
-        field_description = f"tutti i campi indicati in field_name" if 'field_name' in df.columns else "informazioni dalle fatture"
-        
-        # Carica contesto rilevante dalla cartella context
-        context_text = ""
-        if CONTEXT_LOADER_AVAILABLE:
-            context_text = get_context_for_analysis('data_summary', field_name)
-            if context_text:
-                context_text = f"\n\n=== CONTESTO DI DOMINIO E DOCUMENTAZIONE ===\n{context_text}\n"
-        
-        prompt = f"""Analizza i seguenti dati di riconoscimento documentale (fatture) e fornisci un riassunto analitico conciso usando markdown.
+        if is_lucy_data:
+            # Analisi specifica per dati Lucy
+            validated_count = df['is_validated'].sum() if 'is_validated' in df.columns else 0
+            total_count = len(df)
+            methods = df['method_pred'].value_counts().to_string() if 'method_pred' in df.columns else "N/A"
+            
+            # Aggiungi informazioni su field_name se specificato
+            field_context = ""
+            if field_name:
+                field_context = f"\n\nAnalisi specifica per il campo: **{field_name}**\n"
+                field_count = len(df[df['field_name'] == field_name]) if 'field_name' in df.columns else 0
+                field_validated = len(df[(df['field_name'] == field_name) & (df['is_validated'])]) if 'field_name' in df.columns else 0
+                field_context += f"Record totali per questo campo: {field_count}\n"
+                pct_validated = (field_validated/field_count*100) if field_count > 0 else 0
+                field_context += f"Record validati per questo campo: {field_validated} ({pct_validated:.1f}%)\n"
+            elif 'field_name' in df.columns:
+                field_names = df['field_name'].value_counts().to_string()
+                field_context = f"\n\nDistribuzione campi (field_name):\n{field_names}\n"
+            
+            # Aggiorna il contesto per menzionare tutti i campi, non solo id_subject
+            field_description = f"tutti i campi indicati in field_name" if 'field_name' in df.columns else "informazioni dalle fatture"
+            
+            # Carica contesto rilevante dalla cartella context
+            context_text = ""
+            if CONTEXT_LOADER_AVAILABLE:
+                context_text = get_context_for_analysis('data_summary', field_name)
+                if context_text:
+                    context_text = f"\n\n=== CONTESTO DI DOMINIO E DOCUMENTAZIONE ===\n{context_text}\n"
+            
+            prompt = f"""Analizza i seguenti dati di riconoscimento documentale (fatture) e fornisci un riassunto analitico conciso usando markdown.
 
 Contesto: Dati di un sistema di riconoscimento automatico di informazioni da fatture. Il sistema estrae {field_description}. I dati includono predizioni di vari algoritmi e validazioni umane.{field_context}{context_text}
 
@@ -114,9 +125,9 @@ Formattazione richiesta:
 
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario).
 """
-    else:
-        prompt = f"""Analizza i seguenti dati e fornisci un riassunto analitico conciso usando markdown.
-    
+        else:
+            prompt = f"""Analizza i seguenti dati e fornisci un riassunto analitico conciso usando markdown.
+        
 {shape_info}
 
 Statistiche descrittive:
@@ -135,9 +146,16 @@ Formattazione richiesta:
 
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario).
 """
-    
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content
+        
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+            return response.content
+        except (RateLimitError, Exception) as e:
+            # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
+            return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
+    except (RateLimitError, Exception) as e:
+        # Se c'è un errore durante l'inizializzazione, restituisci un messaggio di fallback
+        return f"Analisi AI non disponibile (errore inizializzazione: {str(e)[:100]})."
 
 
 def generate_chart_commentary(chart_description, chart_data_summary, domain="general", field_name=None):
@@ -153,7 +171,19 @@ def generate_chart_commentary(chart_description, chart_data_summary, domain="gen
     Returns:
         str: Commento generato dall'AI in formato markdown
     """
-    llm = get_llm()
+    llm_config = get_llm()
+    if llm_config is None:
+        return None
+    
+    try:
+        llm = ChatOpenAI(
+            model=llm_config["model_name"], 
+            temperature=llm_config["temperature"], 
+            api_key=llm_config["api_key"]
+        )
+    except (RateLimitError, Exception) as e:
+        # Gestisci errori di quota o altri errori
+        return None
     
     domain_context = ""
     if domain == "document":
@@ -192,8 +222,12 @@ Formattazione richiesta:
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario). Struttura il commento in modo leggibile con paragrafi brevi e elenchi quando appropriato.
 """
     
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except (RateLimitError, Exception) as e:
+        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
+        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
 
 
 def analyze_error_patterns(df, field_name=None):
@@ -207,7 +241,19 @@ def analyze_error_patterns(df, field_name=None):
     Returns:
         str: Analisi dei pattern di errore
     """
-    llm = get_llm()
+    llm_config = get_llm()
+    if llm_config is None:
+        return None
+    
+    try:
+        llm = ChatOpenAI(
+            model=llm_config["model_name"], 
+            temperature=llm_config["temperature"], 
+            api_key=llm_config["api_key"]
+        )
+    except (RateLimitError, Exception) as e:
+        # Gestisci errori di quota o altri errori
+        return None
     
     # Filtra per field_name se specificato
     if field_name and 'field_name' in df.columns:
@@ -274,8 +320,12 @@ Formattazione richiesta:
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario). Struttura il commento in modo leggibile con paragrafi brevi e elenchi quando appropriato.
 """
     
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except (RateLimitError, Exception) as e:
+        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
+        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
 
 
 def generate_section_text(section_topic, data_context):
@@ -289,7 +339,19 @@ def generate_section_text(section_topic, data_context):
     Returns:
         str: Testo generato
     """
-    llm = get_llm()
+    llm_config = get_llm()
+    if llm_config is None:
+        return None
+    
+    try:
+        llm = ChatOpenAI(
+            model=llm_config["model_name"], 
+            temperature=llm_config["temperature"], 
+            api_key=llm_config["api_key"]
+        )
+    except (RateLimitError, Exception) as e:
+        # Gestisci errori di quota o altri errori
+        return None
     
     # Carica contesto rilevante dalla cartella context
     context_text = ""
@@ -313,6 +375,10 @@ Il testo dovrebbe essere:
 IMPORTANTE: Scrivi solo testo normale, senza asterischi, cancelletto o altri simboli di formattazione markdown.
 """
     
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except (RateLimitError, Exception) as e:
+        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
+        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
 
