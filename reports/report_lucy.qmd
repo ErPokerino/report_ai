@@ -8,9 +8,31 @@ params:
 
 ## Introduzione
 
-Questo report analizza i dati del sistema Lucy, applicativo documentale per la gestione delle fatture di Luxottica. Il sistema utilizza algoritmi di riconoscimento automatico (incluso ML con XGBoost) per estrarre informazioni dalle fatture, estraendo **tutti i campi** indicati in `field_name`.
+```{python}
+#| echo: false
+#| output: asis
 
-Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM (GPT-5.2) per fornire insights strutturati sui dati.
+import sys
+import os
+sys.path.append('../src')
+
+from ai_analysis import get_llm_with_fallback, get_model_display_name
+from IPython.display import Markdown, display
+
+# Determina quale modello LLM sarà utilizzato e ottieni il nome formattato
+llm_config = get_llm_with_fallback()
+if llm_config is not None:
+    model_name = llm_config.get("model_name", "gpt-5.2")
+    model_display_name = get_model_display_name(model_name)
+else:
+    model_display_name = "modelli LLM disponibili"
+
+# Costruisci il testo dell'introduzione
+intro_text = "Questo report analizza i dati del sistema Lucy, applicativo documentale per la gestione delle fatture di Luxottica. Il sistema utilizza algoritmi di riconoscimento automatico (incluso ML con XGBoost) per estrarre informazioni dalle fatture, estraendo **tutti i campi** indicati in `field_name`.\n\n"
+intro_text += "Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM (" + model_display_name + ") per fornire insights strutturati sui dati."
+
+print(intro_text)
+```
 
 ## Caricamento Dati
 

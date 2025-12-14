@@ -1,1 +1,81 @@
 /* Custom styles for Quarto report */
+
+/* Prevenire overflow tabelle - solo scroll orizzontale quando necessario */
+.table {
+  overflow-x: auto;
+  display: block;
+}
+
+/* Wrapper per tabelle per gestire meglio lo scroll */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+}
+
+/* Limitare larghezza figure per evitare overflow */
+figure {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+figure img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Assicurare che i grafici matplotlib non superino il contenitore */
+.quarto-figure {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Limitare larghezza figure nel contenuto principale */
+main .quarto-figure,
+#quarto-document-content figure {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Assicurare che le immagini nei grafici rispettino il contenitore */
+.quarto-figure img,
+figure img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Prevenire overflow orizzontale */
+.quarto-layout-panel {
+  overflow-x: hidden;
+}
+
+/* Limitare larghezza contenuto principale per rispettare TOC */
+.page-columns .content {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Forzare le figure a rispettare il contenitore */
+.page-columns figure,
+.page-columns .quarto-figure {
+  max-width: 100% !important;
+  width: 100% !important;
+  overflow-x: auto;
+  box-sizing: border-box;
+}
+
+/* Limitare larghezza immagini nei grafici */
+.page-columns figure img,
+.page-columns .quarto-figure img {
+  max-width: 100% !important;
+  height: auto;
+}
+
+/* Assicurare che le tabelle non sforino */
+.page-columns .table {
+  max-width: 100% !important;
+  width: 100% !important;
+  overflow-x: auto;
+  display: block;
+  box-sizing: border-box;
+}
