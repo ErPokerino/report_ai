@@ -5,14 +5,20 @@ import subprocess
 import sys
 import os
 from pathlib import Path
+from typing import Optional, List, Union
+
+# Costanti
+SUPPORTED_FORMATS = ['html', 'pdf', 'revealjs', 'all']
+DEFAULT_FORMAT = 'html'
+DEFAULT_INPUT = 'reports/report_lucy.qmd'
 
 
 def render_quarto_report(
-    input_file="reports/report_lucy.qmd",
-    output_format="all",
-    output_dir=None,
-    execute=True
-):
+    input_file: str = DEFAULT_INPUT,
+    output_format: str = DEFAULT_FORMAT,
+    output_dir: Optional[str] = None,
+    execute: bool = True
+) -> bool:
     """
     Genera il report Quarto in uno o più formati.
     
@@ -23,7 +29,7 @@ def render_quarto_report(
         execute: Se True, esegue il codice Python
         
     Returns:
-        bool: True se il rendering è riuscito
+        True se il rendering è riuscito
     """
     formats = {
         'html': 'html',
@@ -33,7 +39,8 @@ def render_quarto_report(
     }
     
     if output_format not in formats:
-        print(f"Formato non supportato: {output_format}")
+        print(f"ERRORE: Formato non supportato: {output_format}")
+        print(f"Formati supportati: {', '.join(SUPPORTED_FORMATS)}")
         return False
     
     target_formats = formats[output_format]
@@ -65,16 +72,20 @@ def render_quarto_report(
             print(f"OK: Report {fmt} generato con successo!")
         except subprocess.CalledProcessError as e:
             print(f"ERRORE: Errore durante il rendering in {fmt}:")
-            print(e.stderr)
+            if e.stderr:
+                print(e.stderr)
+            if e.stdout:
+                print("Output:", e.stdout)
             success = False
         except FileNotFoundError:
             print("ERRORE: Quarto non trovato. Assicurati che sia installato e nel PATH.")
+            print("   Installa Quarto da: https://quarto.org/docs/get-started/")
             success = False
     
     return success
 
 
-def main():
+def main() -> None:
     """Funzione principale."""
     import argparse
     
@@ -83,14 +94,14 @@ def main():
     )
     parser.add_argument(
         '--format',
-        choices=['html', 'pdf', 'revealjs', 'all'],
-        default='html',
-        help='Formato di output (default: html)'
+        choices=SUPPORTED_FORMATS,
+        default=DEFAULT_FORMAT,
+        help=f'Formato di output (default: {DEFAULT_FORMAT})'
     )
     parser.add_argument(
         '--input',
-        default='reports/report_lucy.qmd',
-        help='File .qmd da renderizzare (default: reports/report_lucy.qmd)'
+        default=DEFAULT_INPUT,
+        help=f'File .qmd da renderizzare (default: {DEFAULT_INPUT})'
     )
     parser.add_argument(
         '--output-dir',
@@ -105,8 +116,10 @@ def main():
     args = parser.parse_args()
     
     # Verifica che il file esista
-    if not Path(args.input).exists():
+    input_path = Path(args.input)
+    if not input_path.exists():
         print(f"ERRORE: File non trovato: {args.input}")
+        print(f"   Percorso assoluto cercato: {input_path.absolute()}")
         sys.exit(1)
     
     # Verifica variabile d'ambiente per AI

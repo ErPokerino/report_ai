@@ -3,14 +3,91 @@ Modulo per il caricamento e la preparazione dei dati.
 """
 import pandas as pd
 import numpy as np
+from typing import Dict, List, Optional, Tuple
+
+# Costanti
+METRIC_DECIMAL_PLACES = 3
+METHOD_TYPE_ML = 'ML'
+METHOD_TYPE_QUERY = 'Query'
+METHOD_TYPE_OTHER = 'Other'
+METHOD_TYPE_UNKNOWN = 'Unknown'
 
 
-def load_sample_data():
+def _prepare_lucy_base(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prepara base dati Lucy (datetime, flags, categorizzazione).
+    
+    Args:
+        df: DataFrame con dati Lucy
+        
+    Returns:
+        DataFrame preparato con colonne aggiuntive
+    """
+    df = df.copy()
+    
+    # Converti datetime se presente
+    if 'datetime_sent' in df.columns:
+        df['datetime_sent'] = pd.to_datetime(df['datetime_sent'])
+        df['date'] = df['datetime_sent'].dt.date
+        df['hour'] = df['datetime_sent'].dt.hour
+        df['day_of_week'] = df['datetime_sent'].dt.day_name()
+    
+    # Crea flag per record validati
+    if 'comparison' in df.columns:
+        df['is_validated'] = df['comparison'].notna()
+        df['is_correct'] = df['comparison'].apply(
+            lambda x: x == 'TP' if pd.notna(x) else None
+        )
+    
+    # Categorizza metodi (ML vs Query)
+    if 'method_pred' in df.columns:
+        df['method_type'] = df['method_pred'].apply(categorize_method)
+    
+    return df
+
+
+def _calculate_metrics_from_confusion(tp: int, fp: int, fn: int, tn: int) -> Dict[str, float]:
+    """
+    Calcola precision, recall, F1, accuracy da confusion matrix.
+    
+    Args:
+        tp: True Positives
+        fp: False Positives
+        fn: False Negatives
+        tn: True Negatives
+        
+    Returns:
+        Dizionario con metriche calcolate
+    """
+    total = tp + fp + fn + tn
+    
+    if total == 0:
+        return {
+            'precision': 0.0,
+            'recall': 0.0,
+            'f1': 0.0,
+            'accuracy': 0.0
+        }
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / total
+    
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'accuracy': accuracy
+    }
+
+
+def load_sample_data() -> pd.DataFrame:
     """
     Carica un dataset di esempio per dimostrazione con dati più realistici.
     
     Returns:
-        pd.DataFrame: Dataset di esempio con dati sintetici
+        Dataset di esempio con dati sintetici
     """
     np.random.seed(42)
     n_samples = 180  # 6 mesi di dati
@@ -64,11 +141,10 @@ def load_sample_data():
         'product_category': categories
     }
     
-    df = pd.DataFrame(data)
-    return df
+    return pd.DataFrame(data)
 
 
-def load_csv_data(filepath):
+def load_csv_data(filepath: str) -> pd.DataFrame:
     """
     Carica dati da un file CSV.
     
@@ -76,7 +152,7 @@ def load_csv_data(filepath):
         filepath: Percorso al file CSV
         
     Returns:
-        pd.DataFrame: Dati caricati
+        Dati caricati e preparati se necessario
     """
     df = pd.read_csv(filepath)
     
@@ -87,7 +163,7 @@ def load_csv_data(filepath):
     return df
 
 
-def prepare_lucy_data(df):
+def prepare_lucy_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepara i dati Lucy per l'analisi.
     
@@ -95,29 +171,12 @@ def prepare_lucy_data(df):
         df: DataFrame con dati Lucy
         
     Returns:
-        pd.DataFrame: DataFrame preparato con metriche calcolate
+        DataFrame preparato con metriche calcolate
     """
-    df = df.copy()
-    
-    # Converti datetime
-    df['datetime_sent'] = pd.to_datetime(df['datetime_sent'])
-    df['date'] = df['datetime_sent'].dt.date
-    df['hour'] = df['datetime_sent'].dt.hour
-    df['day_of_week'] = df['datetime_sent'].dt.day_name()
-    
-    # Crea flag per record validati
-    df['is_validated'] = df['comparison'].notna()
-    
-    # Calcola accuratezza per record validati
-    df['is_correct'] = df['comparison'].apply(lambda x: x == 'TP' if pd.notna(x) else None)
-    
-    # Categorizza metodi (ML vs Query)
-    df['method_type'] = df['method_pred'].apply(categorize_method)
-    
-    return df
+    return _prepare_lucy_base(df)
 
 
-def categorize_method(method):
+def categorize_method(method: str) -> str:
     """
     Categorizza il metodo di riconoscimento.
     
@@ -125,24 +184,24 @@ def categorize_method(method):
         method: Nome del metodo
         
     Returns:
-        str: 'ML' per machine learning, 'Query' per query-based, 'Other' per altri
+        'ML' per machine learning, 'Query' per query-based, 'Other' per altri
     """
     if pd.isna(method):
-        return 'Unknown'
+        return METHOD_TYPE_UNKNOWN
     
     method_str = str(method).lower()
     
     if 'azure' in method_str or 'model' in method_str or 'ml' in method_str:
-        return 'ML'
+        return METHOD_TYPE_ML
     elif 'query' in method_str:
-        return 'Query'
+        return METHOD_TYPE_QUERY
     elif 'similarity' in method_str or 'logo' in method_str:
-        return 'Other'
+        return METHOD_TYPE_OTHER
     else:
-        return 'Other'
+        return METHOD_TYPE_OTHER
 
 
-def calculate_metrics_by_method(df):
+def calculate_metrics_by_method(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calcola metriche di performance per ogni metodo.
     
@@ -150,9 +209,9 @@ def calculate_metrics_by_method(df):
         df: DataFrame con dati validati
         
     Returns:
-        pd.DataFrame: Metriche per metodo (precision, recall, F1, accuracy)
+        Metriche per metodo (precision, recall, F1, accuracy)
     """
-    validated = df[df['is_validated']].copy()
+    validated = df[df['is_validated']].copy() if 'is_validated' in df.columns else pd.DataFrame()
     
     if len(validated) == 0:
         return pd.DataFrame()
@@ -168,34 +227,25 @@ def calculate_metrics_by_method(df):
         fn = len(method_data[method_data['comparison'] == 'FN'])
         tn = len(method_data[method_data['comparison'] == 'TN'])
         
-        total = tp + fp + fn + tn
+        # Calcola metriche usando helper
+        metrics = _calculate_metrics_from_confusion(tp, fp, fn, tn)
         
-        if total > 0:
-            # Calcola metriche
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-            accuracy = (tp + tn) / total if total > 0 else 0
-            
-            metrics_list.append({
-                'method': method,
-                'method_type': method_data['method_type'].iloc[0] if len(method_data) > 0 else 'Unknown',
-                'total': total,
-                'tp': tp,
-                'fp': fp,
-                'fn': fn,
-                'tn': tn,
-                'precision': precision,
-                'recall': recall,
-                'f1': f1,
-                'accuracy': accuracy,
-                'avg_confidence': method_data['confidence'].mean() if 'confidence' in method_data.columns else None
-            })
+        metrics_list.append({
+            'method': method,
+            'method_type': method_data['method_type'].iloc[0] if len(method_data) > 0 else METHOD_TYPE_UNKNOWN,
+            'total': tp + fp + fn + tn,
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'tn': tn,
+            **metrics,
+            'avg_confidence': method_data['confidence'].mean() if 'confidence' in method_data.columns else None
+        })
     
     return pd.DataFrame(metrics_list)
 
 
-def get_field_names(df):
+def get_field_names(df: pd.DataFrame) -> List[str]:
     """
     Estrae tutti i field_name unici dal dataset.
     
@@ -203,7 +253,7 @@ def get_field_names(df):
         df: DataFrame con dati Lucy
         
     Returns:
-        list: Lista di field_name ordinati
+        Lista di field_name ordinati
     """
     if 'field_name' not in df.columns:
         return []
@@ -212,7 +262,7 @@ def get_field_names(df):
     return sorted(field_names)
 
 
-def filter_by_field_name(df, field_name):
+def filter_by_field_name(df: pd.DataFrame, field_name: str) -> pd.DataFrame:
     """
     Filtra il DataFrame per un specifico field_name.
     
@@ -221,36 +271,21 @@ def filter_by_field_name(df, field_name):
         field_name: Nome del campo da filtrare
         
     Returns:
-        pd.DataFrame: DataFrame filtrato e preparato per quel campo
+        DataFrame filtrato e preparato per quel campo
     """
     if 'field_name' not in df.columns:
         return df.copy()
     
     filtered_df = df[df['field_name'] == field_name].copy()
     
-    # Prepara i dati se necessario (riapplica prepare_lucy_data se serve)
+    # Usa helper comune invece di duplicare logica
     if len(filtered_df) > 0:
-        # Assicurati che le colonne necessarie siano presenti
-        if 'datetime_sent' in filtered_df.columns:
-            filtered_df['datetime_sent'] = pd.to_datetime(filtered_df['datetime_sent'])
-            filtered_df['date'] = filtered_df['datetime_sent'].dt.date
-            filtered_df['hour'] = filtered_df['datetime_sent'].dt.hour
-            filtered_df['day_of_week'] = filtered_df['datetime_sent'].dt.day_name()
-        
-        # Crea flag per record validati
-        filtered_df['is_validated'] = filtered_df['comparison'].notna()
-        
-        # Calcola accuratezza per record validati
-        filtered_df['is_correct'] = filtered_df['comparison'].apply(lambda x: x == 'TP' if pd.notna(x) else None)
-        
-        # Categorizza metodi (ML vs Query)
-        if 'method_pred' in filtered_df.columns:
-            filtered_df['method_type'] = filtered_df['method_pred'].apply(categorize_method)
+        filtered_df = _prepare_lucy_base(filtered_df)
     
     return filtered_df
 
 
-def calculate_metrics_by_field_and_method(df):
+def calculate_metrics_by_field_and_method(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calcola metriche aggregate per field_name e metodo.
     
@@ -258,12 +293,12 @@ def calculate_metrics_by_field_and_method(df):
         df: DataFrame con dati validati
         
     Returns:
-        pd.DataFrame: DataFrame con colonne: field_name, method, precision, recall, f1, accuracy, total
+        DataFrame con colonne: field_name, method, precision, recall, f1, accuracy, total
     """
     if 'field_name' not in df.columns:
         return pd.DataFrame()
     
-    validated = df[df['is_validated']].copy()
+    validated = df[df['is_validated']].copy() if 'is_validated' in df.columns else pd.DataFrame()
     
     if len(validated) == 0:
         return pd.DataFrame()
@@ -285,30 +320,24 @@ def calculate_metrics_by_field_and_method(df):
             total = tp + fp + fn + tn
             
             if total > 0:
-                # Calcola metriche
-                precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-                recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-                f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-                accuracy = (tp + tn) / total if total > 0 else 0
+                # Calcola metriche usando helper
+                metrics = _calculate_metrics_from_confusion(tp, fp, fn, tn)
                 
                 metrics_list.append({
                     'field_name': field_name,
                     'method': method,
-                    'precision': precision,
-                    'recall': recall,
-                    'f1': f1,
-                    'accuracy': accuracy,
                     'total': total,
                     'tp': tp,
                     'fp': fp,
                     'fn': fn,
-                    'tn': tn
+                    'tn': tn,
+                    **metrics
                 })
     
     return pd.DataFrame(metrics_list)
 
 
-def prepare_data(df):
+def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepara i dati per l'analisi (pulizia, trasformazioni base).
     
@@ -316,9 +345,6 @@ def prepare_data(df):
         df: DataFrame da preparare
         
     Returns:
-        pd.DataFrame: DataFrame preparato
+        DataFrame preparato
     """
-    df = df.copy()
-    # Aggiungi qui eventuali trasformazioni
-    return df
-
+    return df.copy()

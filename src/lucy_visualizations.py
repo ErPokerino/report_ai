@@ -5,13 +5,85 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+from typing import Optional, Tuple, List
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
 # Configurazione stile
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (10, 6)
 
+# Costanti dimensioni figure
+DEFAULT_FIGSIZE = (10, 6)
+METRICS_FIGSIZE = (12, 6)
+HEATMAP_FIGSIZE = (14, 10)
+CONFUSION_FIGSIZE = (6, 5)
+TIMELINE_FIGSIZE = (14, 6)
 
-def plot_metrics_by_method(metrics_df, figsize=None):
+# Costanti stile
+BAR_ALPHA = 0.8
+GRID_ALPHA = 0.3
+BAR_WIDTH = 0.2
+Y_LIM_MAX = 1.1
+
+
+def _setup_figure(
+    figsize: Tuple[float, float],
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    grid: bool = True,
+    grid_axis: str = 'y'
+) -> Tuple[Figure, Axes]:
+    """
+    Setup comune per figure matplotlib.
+    
+    Args:
+        figsize: Dimensioni figura (width, height)
+        title: Titolo del grafico
+        xlabel: Etichetta asse X
+        ylabel: Etichetta asse Y
+        grid: Se True, mostra griglia
+        grid_axis: Asse per griglia ('y', 'x', o 'both')
+        
+    Returns:
+        Tupla (figura, axes)
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.set_title(title, fontsize=12, fontweight='bold')
+    if grid:
+        ax.grid(True, alpha=GRID_ALPHA, axis=grid_axis)
+    return fig, ax
+
+
+def _plot_metrics_bars(
+    ax: Axes,
+    x: np.ndarray,
+    metrics_data: pd.DataFrame,
+    labels: List[str],
+    width: float = BAR_WIDTH
+) -> None:
+    """
+    Helper per creare barre metriche multiple.
+    
+    Args:
+        ax: Axes su cui disegnare
+        x: Posizioni X per le barre
+        metrics_data: DataFrame con colonne per ogni metrica
+        labels: Lista di etichette per le metriche
+        width: Larghezza delle barre
+    """
+    metric_names = ['precision', 'recall', 'f1', 'accuracy']
+    offsets = [-1.5*width, -0.5*width, 0.5*width, 1.5*width]
+    
+    for metric, offset, label in zip(metric_names, offsets, labels):
+        if metric in metrics_data.columns:
+            ax.bar(x + offset, metrics_data[metric], width, label=label, alpha=BAR_ALPHA)
+
+
+def plot_metrics_by_method(metrics_df: pd.DataFrame, figsize: Optional[Tuple[float, float]] = None) -> Figure:
     """
     Crea un grafico a barre delle metriche per metodo.
     
@@ -20,38 +92,39 @@ def plot_metrics_by_method(metrics_df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (12, 6)
+        figsize = METRICS_FIGSIZE
     
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = _setup_figure(
+        figsize,
+        'Metriche di Performance per Metodo',
+        'Metodo',
+        'Score'
+    )
     
     # Prepara dati
     methods = metrics_df['method'].values
     x = np.arange(len(methods))
-    width = 0.2
     
-    # Crea barre per ogni metrica
-    ax.bar(x - 1.5*width, metrics_df['precision'], width, label='Precision', alpha=0.8)
-    ax.bar(x - 0.5*width, metrics_df['recall'], width, label='Recall', alpha=0.8)
-    ax.bar(x + 0.5*width, metrics_df['f1'], width, label='F1', alpha=0.8)
-    ax.bar(x + 1.5*width, metrics_df['accuracy'], width, label='Accuracy', alpha=0.8)
+    # Crea barre per ogni metrica usando helper
+    _plot_metrics_bars(ax, x, metrics_df, ['Precision', 'Recall', 'F1', 'Accuracy'])
     
-    ax.set_xlabel('Metodo', fontsize=11)
-    ax.set_ylabel('Score', fontsize=11)
-    ax.set_title('Metriche di Performance per Metodo', fontsize=12, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(methods, rotation=45, ha='right')
     ax.legend()
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.set_ylim([0, 1.1])
+    ax.set_ylim([0, Y_LIM_MAX])
     
     plt.tight_layout()
     return fig
 
 
-def plot_confusion_matrix_by_method(df, method, figsize=None):
+def plot_confusion_matrix_by_method(
+    df: pd.DataFrame,
+    method: str,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea una matrice di confusione per un metodo specifico.
     
@@ -61,10 +134,10 @@ def plot_confusion_matrix_by_method(df, method, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (6, 5)
+        figsize = CONFUSION_FIGSIZE
     
     method_data = df[(df['method_pred'] == method) & (df['is_validated'])]
     
@@ -83,10 +156,12 @@ def plot_confusion_matrix_by_method(df, method, figsize=None):
     cm = np.array([[tn, fp], [fn, tp]])
     
     fig, ax = plt.subplots(figsize=figsize)
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                xticklabels=['Negativo', 'Positivo'],
-                yticklabels=['Negativo', 'Positivo'],
-                cbar_kws={"shrink": 0.8})
+    sns.heatmap(
+        cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+        xticklabels=['Negativo', 'Positivo'],
+        yticklabels=['Negativo', 'Positivo'],
+        cbar_kws={"shrink": 0.8}
+    )
     ax.set_xlabel('Predetto', fontsize=11)
     ax.set_ylabel('Reale', fontsize=11)
     ax.set_title(f'Matrice di Confusione: {method}', fontsize=12, fontweight='bold')
@@ -94,7 +169,10 @@ def plot_confusion_matrix_by_method(df, method, figsize=None):
     return fig
 
 
-def plot_confidence_distribution(df, figsize=None):
+def plot_confidence_distribution(
+    df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea un grafico della distribuzione della confidence per metodo.
     
@@ -103,12 +181,17 @@ def plot_confidence_distribution(df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (12, 6)
+        figsize = METRICS_FIGSIZE
     
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = _setup_figure(
+        figsize,
+        'Distribuzione Confidence per Metodo',
+        'Metodo',
+        'Confidence'
+    )
     
     # Filtra solo record con confidence
     df_with_conf = df[df['confidence'].notna()].copy()
@@ -116,8 +199,10 @@ def plot_confidence_distribution(df, figsize=None):
     if len(df_with_conf) > 0:
         # Box plot per metodo
         methods = df_with_conf['method_pred'].dropna().unique()
-        data_to_plot = [df_with_conf[df_with_conf['method_pred'] == m]['confidence'].values 
-                        for m in methods]
+        data_to_plot = [
+            df_with_conf[df_with_conf['method_pred'] == m]['confidence'].values 
+            for m in methods
+        ]
         
         bp = ax.boxplot(data_to_plot, labels=methods, patch_artist=True)
         
@@ -126,17 +211,16 @@ def plot_confidence_distribution(df, figsize=None):
         for patch, color in zip(bp['boxes'], colors):
             patch.set_facecolor(color)
         
-        ax.set_xlabel('Metodo', fontsize=11)
-        ax.set_ylabel('Confidence', fontsize=11)
-        ax.set_title('Distribuzione Confidence per Metodo', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3, axis='y')
         plt.xticks(rotation=45, ha='right')
     
     plt.tight_layout()
     return fig
 
 
-def plot_timeline_predictions(df, figsize=None):
+def plot_timeline_predictions(
+    df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea un grafico timeline delle predizioni nel tempo.
     
@@ -145,16 +229,22 @@ def plot_timeline_predictions(df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (14, 6)
+        figsize = TIMELINE_FIGSIZE
     
     # Raggruppa per data e metodo
     daily_counts = df.groupby([df['datetime_sent'].dt.date, 'method_pred']).size().reset_index(name='count')
     daily_counts['date'] = pd.to_datetime(daily_counts['datetime_sent'])
     
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = _setup_figure(
+        figsize,
+        'Timeline Predizioni per Metodo',
+        'Data',
+        'Numero di Predizioni',
+        grid_axis='both'
+    )
     
     # Plot per ogni metodo
     methods = daily_counts['method_pred'].dropna().unique()
@@ -162,17 +252,16 @@ def plot_timeline_predictions(df, figsize=None):
         method_data = daily_counts[daily_counts['method_pred'] == method]
         ax.plot(method_data['date'], method_data['count'], marker='o', label=method, linewidth=2)
     
-    ax.set_xlabel('Data', fontsize=11)
-    ax.set_ylabel('Numero di Predizioni', fontsize=11)
-    ax.set_title('Timeline Predizioni per Metodo', fontsize=12, fontweight='bold')
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax.grid(True, alpha=0.3)
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     return fig
 
 
-def plot_accuracy_heatmap(df, figsize=None):
+def plot_accuracy_heatmap(
+    df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea una heatmap dell'accuratezza per country e metodo.
     
@@ -181,12 +270,12 @@ def plot_accuracy_heatmap(df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (14, 10)
+        figsize = HEATMAP_FIGSIZE
     
-    validated = df[df['is_validated']].copy()
+    validated = df[df['is_validated']].copy() if 'is_validated' in df.columns else pd.DataFrame()
     
     if len(validated) == 0:
         fig, ax = plt.subplots(figsize=figsize)
@@ -219,9 +308,11 @@ def plot_accuracy_heatmap(df, figsize=None):
     pivot_table = accuracy_df.pivot(index='country', columns='method', values='accuracy')
     
     fig, ax = plt.subplots(figsize=figsize)
-    sns.heatmap(pivot_table, annot=True, fmt='.2f', cmap='RdYlGn', center=0.5,
-                vmin=0, vmax=1, ax=ax, cbar_kws={"shrink": 0.8},
-                annot_kws={'size': 12, 'weight': 'bold'})
+    sns.heatmap(
+        pivot_table, annot=True, fmt='.2f', cmap='RdYlGn', center=0.5,
+        vmin=0, vmax=1, ax=ax, cbar_kws={"shrink": 0.8},
+        annot_kws={'size': 12, 'weight': 'bold'}
+    )
     ax.set_xlabel('Metodo', fontsize=14, fontweight='bold')
     ax.set_ylabel('Country', fontsize=14, fontweight='bold')
     ax.set_title('Accuracy per Country e Metodo', fontsize=16, fontweight='bold')
@@ -231,7 +322,10 @@ def plot_accuracy_heatmap(df, figsize=None):
     return fig
 
 
-def plot_ml_vs_query_comparison(metrics_df, figsize=None):
+def plot_ml_vs_query_comparison(
+    metrics_df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Confronta performance ML vs Query-based.
     
@@ -240,10 +334,10 @@ def plot_ml_vs_query_comparison(metrics_df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (10, 6)
+        figsize = DEFAULT_FIGSIZE
     
     # Raggruppa per tipo di metodo
     type_metrics = metrics_df.groupby('method_type').agg({
@@ -254,30 +348,31 @@ def plot_ml_vs_query_comparison(metrics_df, figsize=None):
         'total': 'sum'
     }).reset_index()
     
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = _setup_figure(
+        figsize,
+        'Confronto ML vs Query-based vs Other',
+        'Tipo di Metodo',
+        'Score Medio'
+    )
     
     x = np.arange(len(type_metrics))
-    width = 0.2
     
-    ax.bar(x - 1.5*width, type_metrics['precision'], width, label='Precision', alpha=0.8)
-    ax.bar(x - 0.5*width, type_metrics['recall'], width, label='Recall', alpha=0.8)
-    ax.bar(x + 0.5*width, type_metrics['f1'], width, label='F1', alpha=0.8)
-    ax.bar(x + 1.5*width, type_metrics['accuracy'], width, label='Accuracy', alpha=0.8)
+    # Usa helper per barre metriche
+    _plot_metrics_bars(ax, x, type_metrics, ['Precision', 'Recall', 'F1', 'Accuracy'])
     
-    ax.set_xlabel('Tipo di Metodo', fontsize=11)
-    ax.set_ylabel('Score Medio', fontsize=11)
-    ax.set_title('Confronto ML vs Query-based vs Other', fontsize=12, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(type_metrics['method_type'])
     ax.legend()
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.set_ylim([0, 1.1])
+    ax.set_ylim([0, Y_LIM_MAX])
     
     plt.tight_layout()
     return fig
 
 
-def plot_method_usage(df, figsize=None):
+def plot_method_usage(
+    df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Mostra la distribuzione dell'uso dei metodi.
     
@@ -286,19 +381,22 @@ def plot_method_usage(df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (10, 6)
+        figsize = DEFAULT_FIGSIZE
     
     method_counts = df['method_pred'].value_counts()
     
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.barh(method_counts.index, method_counts.values, color='steelblue', alpha=0.7)
-    ax.set_xlabel('Numero di Predizioni', fontsize=11)
-    ax.set_ylabel('Metodo', fontsize=11)
-    ax.set_title('Distribuzione Uso Metodi', fontsize=12, fontweight='bold')
-    ax.grid(True, alpha=0.3, axis='x')
+    fig, ax = _setup_figure(
+        figsize,
+        'Distribuzione Uso Metodi',
+        'Numero di Predizioni',
+        'Metodo',
+        grid_axis='x'
+    )
+    
+    ax.barh(method_counts.index, method_counts.values, color='steelblue', alpha=BAR_ALPHA)
     
     # Aggiungi valori sulle barre
     for i, v in enumerate(method_counts.values):
@@ -308,7 +406,10 @@ def plot_method_usage(df, figsize=None):
     return fig
 
 
-def plot_metrics_by_field_name(metrics_df, figsize=None):
+def plot_metrics_by_field_name(
+    metrics_df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea un grafico a barre delle metriche aggregate per field_name.
     
@@ -317,10 +418,10 @@ def plot_metrics_by_field_name(metrics_df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (12, 6)
+        figsize = METRICS_FIGSIZE
     
     if len(metrics_df) == 0:
         fig, ax = plt.subplots(figsize=figsize)
@@ -335,31 +436,32 @@ def plot_metrics_by_field_name(metrics_df, figsize=None):
         'accuracy': 'mean'
     }).reset_index()
     
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = _setup_figure(
+        figsize,
+        'Metriche di Performance per Campo',
+        'Campo (field_name)',
+        'Score Medio'
+    )
     
     field_names = field_metrics['field_name'].values
     x = np.arange(len(field_names))
-    width = 0.2
     
-    ax.bar(x - 1.5*width, field_metrics['precision'], width, label='Precision', alpha=0.8)
-    ax.bar(x - 0.5*width, field_metrics['recall'], width, label='Recall', alpha=0.8)
-    ax.bar(x + 0.5*width, field_metrics['f1'], width, label='F1', alpha=0.8)
-    ax.bar(x + 1.5*width, field_metrics['accuracy'], width, label='Accuracy', alpha=0.8)
+    # Usa helper per barre metriche
+    _plot_metrics_bars(ax, x, field_metrics, ['Precision', 'Recall', 'F1', 'Accuracy'])
     
-    ax.set_xlabel('Campo (field_name)', fontsize=11)
-    ax.set_ylabel('Score Medio', fontsize=11)
-    ax.set_title('Metriche di Performance per Campo', fontsize=12, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(field_names, rotation=45, ha='right')
     ax.legend()
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.set_ylim([0, 1.1])
+    ax.set_ylim([0, Y_LIM_MAX])
     
     plt.tight_layout()
     return fig
 
 
-def plot_field_name_distribution(df, figsize=None):
+def plot_field_name_distribution(
+    df: pd.DataFrame,
+    figsize: Optional[Tuple[float, float]] = None
+) -> Figure:
     """
     Crea un grafico della distribuzione dei field_name.
     
@@ -368,10 +470,10 @@ def plot_field_name_distribution(df, figsize=None):
         figsize: Tuple (width, height) per le dimensioni
         
     Returns:
-        matplotlib.figure.Figure: Figura del grafico
+        Figura del grafico
     """
     if figsize is None:
-        figsize = (10, 6)
+        figsize = DEFAULT_FIGSIZE
     
     if 'field_name' not in df.columns:
         fig, ax = plt.subplots(figsize=figsize)
@@ -380,12 +482,15 @@ def plot_field_name_distribution(df, figsize=None):
     
     field_counts = df['field_name'].value_counts()
     
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.barh(field_counts.index, field_counts.values, color='steelblue', alpha=0.7)
-    ax.set_xlabel('Numero di Record', fontsize=11)
-    ax.set_ylabel('Campo (field_name)', fontsize=11)
-    ax.set_title('Distribuzione Campi (field_name)', fontsize=12, fontweight='bold')
-    ax.grid(True, alpha=0.3, axis='x')
+    fig, ax = _setup_figure(
+        figsize,
+        'Distribuzione Campi (field_name)',
+        'Numero di Record',
+        'Campo (field_name)',
+        grid_axis='x'
+    )
+    
+    ax.barh(field_counts.index, field_counts.values, color='steelblue', alpha=BAR_ALPHA)
     
     # Aggiungi valori sulle barre
     for i, v in enumerate(field_counts.values):
@@ -393,4 +498,3 @@ def plot_field_name_distribution(df, figsize=None):
     
     plt.tight_layout()
     return fig
-

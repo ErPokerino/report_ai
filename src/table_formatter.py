@@ -2,10 +2,20 @@
 Modulo per formattare tabelle per Quarto.
 """
 import pandas as pd
+from typing import Optional, Dict, Any, Union
 from IPython.display import Markdown, display
 
+# Costanti
+DEFAULT_DIGITS = 3
+EMPTY_DATA_MESSAGE = "*Nessun dato disponibile*"
 
-def format_table(df, caption=None, digits=3, return_string=False):
+
+def format_table(
+    df: Optional[pd.DataFrame],
+    caption: Optional[str] = None,
+    digits: int = DEFAULT_DIGITS,
+    return_string: bool = False
+) -> Union[Markdown, str]:
     """
     Formatta un DataFrame come tabella Quarto markdown.
     
@@ -19,8 +29,7 @@ def format_table(df, caption=None, digits=3, return_string=False):
         Markdown object o stringa da visualizzare
     """
     if df is None or len(df) == 0:
-        result = "*Nessun dato disponibile*"
-        return result if return_string else Markdown(result)
+        return EMPTY_DATA_MESSAGE if return_string else Markdown(EMPTY_DATA_MESSAGE)
     
     # Arrotonda valori numerici
     df_formatted = df.copy()
@@ -37,7 +46,11 @@ def format_table(df, caption=None, digits=3, return_string=False):
     return markdown_str if return_string else Markdown(markdown_str)
 
 
-def format_summary_dict(data_dict, title=None, return_string=False):
+def format_summary_dict(
+    data_dict: Dict[str, Any],
+    title: Optional[str] = None,
+    return_string: bool = False
+) -> Union[Markdown, str]:
     """
     Formatta un dizionario di statistiche come tabella.
     
@@ -50,13 +63,14 @@ def format_summary_dict(data_dict, title=None, return_string=False):
         Markdown object o stringa da visualizzare
     """
     df = pd.DataFrame(list(data_dict.items()), columns=['Metrica', 'Valore'])
-    
-    if title:
-        return format_table(df, caption=title, return_string=return_string)
-    return format_table(df, return_string=return_string)
+    return format_table(df, caption=title, return_string=return_string)
 
 
-def display_table(df, caption=None, digits=3):
+def display_table(
+    df: pd.DataFrame,
+    caption: Optional[str] = None,
+    digits: int = DEFAULT_DIGITS
+) -> None:
     """
     Visualizza direttamente una tabella formattata.
     

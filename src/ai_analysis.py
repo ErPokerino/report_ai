@@ -6,10 +6,21 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 import pandas as pd
 import os
+import sys
+from typing import Dict, List, Optional, Any, Union
 from openai import RateLimitError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # Carica variabili d'ambiente da .env
 load_dotenv()
+
+# Timeout per le chiamate API (in secondi) - configurabile via variabile d'ambiente
+API_TIMEOUT_SECONDS = int(os.getenv("LLM_API_TIMEOUT", "60"))
+
+# Costanti
+GEMINI_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = "gpt-5.2"
+DEFAULT_TEMPERATURE = 0
 
 # Importa il modulo per caricare il contesto
 try:
@@ -17,11 +28,42 @@ try:
     CONTEXT_LOADER_AVAILABLE = True
 except ImportError:
     CONTEXT_LOADER_AVAILABLE = False
-    def get_context_for_analysis(analysis_type="general", field_name=None):
+    def get_context_for_analysis(analysis_type: str = "general", field_name: Optional[str] = None) -> str:
         return ""
 
+# Importa Gemini se disponibile
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
 
-def get_llm(model_name="gpt-5.2", temperature=0):
+
+def get_model_display_name(model_name: Optional[str]) -> str:
+    """
+    Converte il nome tecnico del modello in un nome leggibile per il report.
+    
+    Args:
+        model_name: Nome tecnico del modello (es. "gpt-5.2", "gemini-3-pro-preview")
+        
+    Returns:
+        Nome formattato per la visualizzazione (es. "GPT-5.2", "Gemini 3 PRO")
+    """
+    if model_name is None:
+        return "modelli LLM disponibili"
+    
+    model_map = {
+        "gpt-5.2": "GPT-5.2",
+        "gpt-4o": "GPT-4o",
+        "gpt-4-turbo": "GPT-4 Turbo",
+        "gpt-4": "GPT-4",
+        "gemini-3-pro-preview": "Gemini 3 PRO",
+        "gemini-3-pro": "Gemini 3 PRO",
+    }
+    return model_map.get(model_name, model_name.upper().replace("-", " "))
+
+
+def get_llm(model_name: str = DEFAULT_MODEL, temperature: float = DEFAULT_TEMPERATURE) -> Optional[Dict[str, Any]]:
     """
     Inizializza il modello LLM.
     
@@ -30,7 +72,7 @@ def get_llm(model_name="gpt-5.2", temperature=0):
         temperature: Temperatura per la generazione
         
     Returns:
-        ChatOpenAI: Istanza del modello, o None se API key non disponibile o errore
+        Configurazione LLM o None se API key non disponibile
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or api_key.strip() == "":
@@ -41,7 +83,306 @@ def get_llm(model_name="gpt-5.2", temperature=0):
     return {"model_name": model_name, "temperature": temperature, "api_key": api_key}
 
 
-def analyze_data_summary(df, field_name=None):
+def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float = DEFAULT_TEMPERATURE) -> Optional[Dict[str, Any]]:
+    """
+    Inizializza LLM con fallback a modelli alternativi se quota esaurita.
+    
+    Ordine di fallback: gpt-5.2 -> gpt-4o -> gpt-4-turbo -> gpt-4 -> gemini-3-pro-preview
+    
+    Args:
+        primary_model: Modello principale da provare (default: gpt-5.2)
+        temperature: Temperatura per la generazione
+        
+    Returns:
+        Configurazione LLM con model_name, temperature, api_key, provider, o None se tutti falliscono
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    
+    # Se non ci sono API keys disponibili, restituisci None
+    if (not openai_api_key or openai_api_key.strip() == "") and (not google_api_key or google_api_key.strip() == ""):
+        return None
+    
+    # Ordine di fallback: prioritario gpt-5.2, poi modelli alternativi OpenAI, poi Gemini
+    fallback_models = ["gpt-5.2", "gpt-4o", "gpt-4-turbo", "gpt-4"]
+    
+    # Se il modello primario non è nella lista, aggiungilo all'inizio
+    if primary_model not in fallback_models:
+        fallback_models.insert(0, primary_model)
+    else:
+        # Riordina per avere primary_model come primo
+        fallback_models.remove(primary_model)
+        fallback_models.insert(0, primary_model)
+    
+    # Aggiungi Gemini come ultimo fallback se disponibile
+    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+        fallback_models.append(GEMINI_MODEL)
+    
+    # Prova ogni modello OpenAI in ordine
+    if openai_api_key and openai_api_key.strip() != "":
+        for model in fallback_models:
+            if model == GEMINI_MODEL:
+                continue  # Salta Gemini qui, lo gestiamo dopo
+            try:
+                # Prova a inizializzare il modello OpenAI con timeout
+                llm = ChatOpenAI(
+                    model=model,
+                    temperature=temperature,
+                    api_key=openai_api_key,
+                    timeout=API_TIMEOUT_SECONDS
+                )
+                # Se l'inizializzazione riesce, restituisci la configurazione
+                return {
+                    "model_name": model, 
+                    "temperature": temperature, 
+                    "api_key": openai_api_key, 
+                    "llm": llm, 
+                    "fallback_models": fallback_models,
+                    "provider": "openai"
+                }
+            except RateLimitError:
+                # Se quota esaurita, prova il modello successivo
+                continue
+            except Exception:
+                # Per altri errori, prova comunque il modello successivo
+                continue
+    
+    # Se tutti i modelli OpenAI falliscono, prova Gemini
+    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+        try:
+            # Prova a inizializzare Gemini
+            llm = ChatGoogleGenerativeAI(
+                model=GEMINI_MODEL,
+                temperature=temperature,
+                google_api_key=google_api_key
+            )
+            return {
+                "model_name": GEMINI_MODEL, 
+                "temperature": temperature, 
+                "api_key": google_api_key, 
+                "llm": llm, 
+                "fallback_models": fallback_models,
+                "provider": "google"
+            }
+        except Exception:
+            # Se anche Gemini fallisce, continua
+            pass
+    
+    # Se tutti i modelli falliscono, restituisci None
+    return None
+
+
+def _extract_text_from_response(response: Any) -> str:
+    """
+    Estrae il testo da una risposta LLM, gestendo sia OpenAI (.content) che Gemini (.text).
+    
+    Secondo la documentazione LangChain:
+    - Gemini: response.text dovrebbe essere una stringa consolidata, response.content può essere lista di dizionari
+    - OpenAI: response.content è una stringa
+    
+    Args:
+        response: Risposta da LLM (OpenAI o Gemini) - oggetto AIMessage
+        
+    Returns:
+        Testo estratto dalla risposta
+    """
+    # Se la risposta stessa è una lista (caso anomalo)
+    if isinstance(response, list):
+        extracted = []
+        for item in response:
+            if isinstance(item, dict):
+                # Formato: {"type": "text", "text": "..."}
+                if 'text' in item:
+                    extracted.append(item.get('text', ''))
+            else:
+                extracted.append(str(item))
+        return ' '.join(extracted)
+    
+    # Priorità 1: Per Gemini, response.text dovrebbe già essere una stringa consolidata
+    if hasattr(response, 'text'):
+        text = response.text
+        # Se text è già una stringa (caso normale Gemini), restituiscila
+        if isinstance(text, str):
+            return text
+        # Se text è una lista (caso anomalo), gestiscila
+        if isinstance(text, list):
+            extracted = []
+            for item in text:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted.append(item.get('text', ''))
+                else:
+                    extracted.append(str(item))
+            return ' '.join(extracted)
+    
+    # Priorità 2: Fallback - usa response.content
+    content = getattr(response, 'content', None)
+    
+    # Se content è una lista di dizionari (formato Gemini: [{"type": "text", "text": "..."}])
+    if isinstance(content, list):
+        extracted = []
+        for item in content:
+            if isinstance(item, dict) and 'text' in item:
+                # Estrai il campo "text" dal dizionario
+                extracted.append(item.get('text', ''))
+            else:
+                extracted.append(str(item))
+        return ' '.join(extracted)
+    
+    # Se content è una stringa (OpenAI o Gemini caso normale)
+    if isinstance(content, str):
+        return content
+    
+    # Se content è None o altro tipo, prova altri attributi
+    if content is None:
+        # Prova a vedere se response ha altri attributi
+        if hasattr(response, 'parts'):
+            parts = response.parts
+            if isinstance(parts, list):
+                extracted = []
+                for item in parts:
+                    if isinstance(item, dict) and 'text' in item:
+                        extracted.append(item.get('text', ''))
+                    else:
+                        extracted.append(str(item))
+                return ' '.join(extracted)
+            return str(parts) if parts is not None else ""
+    
+    # Ultimo fallback: converti in stringa
+    return str(content) if content is not None else ""
+
+
+def _invoke_with_timeout(llm: Any, messages: List[HumanMessage], timeout_seconds: int = API_TIMEOUT_SECONDS) -> Any:
+    """
+    Invoca LLM con timeout per evitare blocchi indefiniti.
+    
+    Args:
+        llm: Istanza LLM da invocare
+        messages: Lista di messaggi da inviare
+        timeout_seconds: Timeout in secondi (default: API_TIMEOUT_SECONDS)
+        
+    Returns:
+        Risposta LLM
+        
+    Raises:
+        FuturesTimeoutError: Se la chiamata supera il timeout
+        Exception: Altri errori dalla chiamata LLM
+    """
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(llm.invoke, messages)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            print(f"ATTENZIONE: Timeout dopo {timeout_seconds} secondi per la chiamata LLM", file=sys.stderr)
+            raise
+
+
+def _try_fallback_models(
+    fallback_models: List[str],
+    current_index: int,
+    prompt: str,
+    temperature: float,
+    openai_api_key: Optional[str],
+    google_api_key: Optional[str]
+) -> Optional[str]:
+    """
+    Prova modelli fallback in sequenza.
+    
+    Args:
+        fallback_models: Lista di modelli da provare
+        current_index: Indice del modello corrente nella lista
+        prompt: Prompt da inviare
+        temperature: Temperatura per la generazione
+        openai_api_key: API key OpenAI
+        google_api_key: API key Google
+        
+    Returns:
+        Risposta LLM o None se tutti i modelli falliscono
+    """
+    # Prova modelli OpenAI successivi
+    if openai_api_key and openai_api_key.strip() != "":
+        for model in fallback_models[current_index + 1:]:
+            if model == GEMINI_MODEL:
+                continue  # Salta Gemini qui
+            try:
+                llm = ChatOpenAI(
+                    model=model,
+                    temperature=temperature,
+                    api_key=openai_api_key,
+                    timeout=API_TIMEOUT_SECONDS
+                )
+                response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+                return _extract_text_from_response(response)
+            except (RateLimitError, FuturesTimeoutError):
+                continue
+            except Exception:
+                continue
+    
+    # Se tutti i modelli OpenAI falliscono, prova Gemini
+    if GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=GEMINI_MODEL,
+                temperature=temperature,
+                google_api_key=google_api_key
+            )
+            response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+            return _extract_text_from_response(response)
+        except Exception:
+            pass
+    
+    return None
+
+
+def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) -> Optional[str]:
+    """
+    Invoca LLM con fallback automatico se si verifica RateLimitError o timeout.
+    
+    Args:
+        llm_config: Configurazione LLM da get_llm_with_fallback()
+        prompt: Prompt da inviare all'LLM
+        
+    Returns:
+        Risposta dell'LLM, o None se tutti i modelli falliscono
+    """
+    if llm_config is None:
+        return None
+    
+    # Ottieni llm e lista di fallback
+    llm = llm_config.get("llm")
+    fallback_models = llm_config.get("fallback_models", [llm_config["model_name"]])
+    provider = llm_config.get("provider", "openai")
+    current_model_index = fallback_models.index(llm_config["model_name"])
+    temperature = llm_config.get("temperature", DEFAULT_TEMPERATURE)
+    
+    # Prova prima con il modello corrente
+    try:
+        response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+        return _extract_text_from_response(response)
+    except (RateLimitError, FuturesTimeoutError):
+        # Se quota esaurita o timeout, prova fallback
+        return _try_fallback_models(
+            fallback_models,
+            current_model_index,
+            prompt,
+            temperature,
+            os.getenv("OPENAI_API_KEY"),
+            os.getenv("GOOGLE_API_KEY")
+        )
+    except Exception:
+        # Altri errori: se è OpenAI, prova fallback; se è già Gemini, restituisci None
+        if provider == "openai":
+            return _try_fallback_models(
+                fallback_models,
+                current_model_index,
+                prompt,
+                temperature,
+                os.getenv("OPENAI_API_KEY"),
+                os.getenv("GOOGLE_API_KEY")
+            )
+        return None
+
+
+def analyze_data_summary(df: pd.DataFrame, field_name: Optional[str] = None) -> str:
     """
     Genera un riassunto analitico dei dati usando AI.
     
@@ -50,18 +391,13 @@ def analyze_data_summary(df, field_name=None):
         field_name: Nome del campo specifico da analizzare (opzionale)
         
     Returns:
-        str: Riassunto generato dall'AI, o None se AI non disponibile
+        Riassunto generato dall'AI, o messaggio di errore se AI non disponibile
     """
-    llm_config = get_llm()
+    llm_config = get_llm_with_fallback()
     if llm_config is None:
-        return "Analisi AI non disponibile (API key non configurata)."
+        return "Analisi AI non disponibile (API key non configurata o tutti i modelli hanno quota esaurita)."
     
     try:
-        llm = ChatOpenAI(
-            model=llm_config["model_name"], 
-            temperature=llm_config["temperature"], 
-            api_key=llm_config["api_key"]
-        )
         # Prepara statistiche descrittive
         stats = df.describe().to_string()
         shape_info = f"Shape: {df.shape}\nColonne: {', '.join(df.columns.tolist())}"
@@ -147,18 +483,23 @@ Formattazione richiesta:
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario).
 """
         
-        try:
-            response = llm.invoke([HumanMessage(content=prompt)])
-            return response.content
-        except (RateLimitError, Exception) as e:
-            # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
-            return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
-    except (RateLimitError, Exception) as e:
+        # Usa la funzione con fallback automatico
+        result = invoke_llm_with_fallback(llm_config, prompt)
+        if result is not None:
+            return result
+        else:
+            return "Analisi AI non disponibile (quota esaurita per tutti i modelli disponibili)."
+    except Exception as e:
         # Se c'è un errore durante l'inizializzazione, restituisci un messaggio di fallback
         return f"Analisi AI non disponibile (errore inizializzazione: {str(e)[:100]})."
 
 
-def generate_chart_commentary(chart_description, chart_data_summary, domain="general", field_name=None):
+def generate_chart_commentary(
+    chart_description: str,
+    chart_data_summary: str,
+    domain: str = "general",
+    field_name: Optional[str] = None
+) -> Optional[str]:
     """
     Genera un commento testuale per un grafico usando AI.
     
@@ -169,20 +510,10 @@ def generate_chart_commentary(chart_description, chart_data_summary, domain="gen
         field_name: Nome del campo specifico analizzato (opzionale)
         
     Returns:
-        str: Commento generato dall'AI in formato markdown
+        Commento generato dall'AI in formato markdown, o None se AI non disponibile
     """
-    llm_config = get_llm()
+    llm_config = get_llm_with_fallback()
     if llm_config is None:
-        return None
-    
-    try:
-        llm = ChatOpenAI(
-            model=llm_config["model_name"], 
-            temperature=llm_config["temperature"], 
-            api_key=llm_config["api_key"]
-        )
-    except (RateLimitError, Exception) as e:
-        # Gestisci errori di quota o altri errori
         return None
     
     domain_context = ""
@@ -222,15 +553,11 @@ Formattazione richiesta:
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario). Struttura il commento in modo leggibile con paragrafi brevi e elenchi quando appropriato.
 """
     
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content
-    except (RateLimitError, Exception) as e:
-        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
-        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
+    # Usa la funzione con fallback automatico
+    return invoke_llm_with_fallback(llm_config, prompt)
 
 
-def analyze_error_patterns(df, field_name=None):
+def analyze_error_patterns(df: pd.DataFrame, field_name: Optional[str] = None) -> Optional[str]:
     """
     Analizza i pattern di errore nei dati Lucy.
     
@@ -239,20 +566,10 @@ def analyze_error_patterns(df, field_name=None):
         field_name: Nome del campo specifico da analizzare (opzionale)
         
     Returns:
-        str: Analisi dei pattern di errore
+        Analisi dei pattern di errore, o None se AI non disponibile
     """
-    llm_config = get_llm()
+    llm_config = get_llm_with_fallback()
     if llm_config is None:
-        return None
-    
-    try:
-        llm = ChatOpenAI(
-            model=llm_config["model_name"], 
-            temperature=llm_config["temperature"], 
-            api_key=llm_config["api_key"]
-        )
-    except (RateLimitError, Exception) as e:
-        # Gestisci errori di quota o altri errori
         return None
     
     # Filtra per field_name se specificato
@@ -320,15 +637,11 @@ Formattazione richiesta:
 IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quando necessario). Struttura il commento in modo leggibile con paragrafi brevi e elenchi quando appropriato.
 """
     
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content
-    except (RateLimitError, Exception) as e:
-        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
-        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
+    # Usa la funzione con fallback automatico
+    return invoke_llm_with_fallback(llm_config, prompt)
 
 
-def generate_section_text(section_topic, data_context):
+def generate_section_text(section_topic: str, data_context: str) -> Optional[str]:
     """
     Genera testo per una sezione del report usando AI.
     
@@ -337,20 +650,10 @@ def generate_section_text(section_topic, data_context):
         data_context: Contesto dei dati
         
     Returns:
-        str: Testo generato
+        Testo generato, o None se AI non disponibile
     """
-    llm_config = get_llm()
+    llm_config = get_llm_with_fallback()
     if llm_config is None:
-        return None
-    
-    try:
-        llm = ChatOpenAI(
-            model=llm_config["model_name"], 
-            temperature=llm_config["temperature"], 
-            api_key=llm_config["api_key"]
-        )
-    except (RateLimitError, Exception) as e:
-        # Gestisci errori di quota o altri errori
         return None
     
     # Carica contesto rilevante dalla cartella context
@@ -375,10 +678,5 @@ Il testo dovrebbe essere:
 IMPORTANTE: Scrivi solo testo normale, senza asterischi, cancelletto o altri simboli di formattazione markdown.
 """
     
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content
-    except (RateLimitError, Exception) as e:
-        # Se c'è un errore (es. quota esaurita), restituisci un messaggio di fallback
-        return f"Analisi AI non disponibile (errore: {str(e)[:100]})."
-
+    # Usa la funzione con fallback automatico
+    return invoke_llm_with_fallback(llm_config, prompt)

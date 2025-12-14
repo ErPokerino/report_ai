@@ -2,6 +2,11 @@
 
 Sistema per la generazione automatica di reportistica usando Quarto per output multi-format (HTML, PDF, PPT) e AI (LangChain) per analisi testuali, commenti ai grafici e generazione di contenuti.
 
+## Documentazione
+
+- **[DOCS.md](DOCS.md)**: Documentazione funzionale completa che spiega come funziona il sistema, il flusso dati end-to-end, i componenti principali e le interazioni tra moduli. **Consigliata per comprendere l'architettura del sistema.**
+- Questo README: Focus su setup, installazione e uso pratico.
+
 ## Caratteristiche
 
 - 📊 Generazione automatica di visualizzazioni
@@ -105,7 +110,8 @@ Oppure modifica direttamente i parametri nel YAML header del file `.qmd`.
 
 ```
 quarto/
-├── README.md                    # Questo file
+├── README.md                    # Questo file (setup e uso)
+├── DOCS.md                      # Documentazione funzionale completa
 ├── pyproject.toml              # Dipendenze Python (UV)
 ├── uv.lock                     # Lock file UV
 ├── .env.example                # Template variabili ambiente
@@ -121,7 +127,8 @@ quarto/
 │   ├── data_loader.py          # Caricamento e preparazione dati
 │   ├── lucy_visualizations.py # Visualizzazioni specifiche Lucy
 │   ├── ai_analysis.py          # Integrazione LangChain per analisi AI
-│   └── table_formatter.py      # Formattazione tabelle Quarto
+│   ├── table_formatter.py      # Formattazione tabelle Quarto
+│   └── context_loader.py      # Caricamento file di contesto
 │
 ├── data/                       # Dati (dinamici)
 │   └── lucy_data.csv           # Dataset Lucy (può variare nel tempo)
