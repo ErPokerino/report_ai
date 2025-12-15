@@ -212,18 +212,24 @@ Per dettagli completi sulle colonne disponibili, consulta `context/data_dictiona
 
 Per abilitare le funzionalità AI (LangChain), configura la API key:
 
-**Metodo consigliato:** Modifica il file `.env` nella root del progetto e inserisci la tua API key:
+**Metodo consigliato:** Modifica il file `.env` nella root del progetto e inserisci le tue API keys:
 ```
 OPENAI_API_KEY=sk-tua-chiave-qui
+GOOGLE_API_KEY=tua-chiave-google-qui
 ```
 
-Il file `.env` viene caricato automaticamente. **Non committare il file `.env`** (è già nel `.gitignore`).
+Il file `.env` viene caricato automaticamente. **Nota**: 
+- `OPENAI_API_KEY` è richiesta per i modelli OpenAI (GPT-5.2, GPT-4o)
+- `GOOGLE_API_KEY` è opzionale ma consigliata per abilitare i modelli Gemini come fallback
+- **Non committare il file `.env`** (è già nel `.gitignore`)
 
 **Metodo alternativo:** Usa variabili d'ambiente di sistema (vedi sezione Setup).
 
 ### Modello LLM
 
-Il sistema utilizza **GPT-5.2** come modello predefinito. Il modello può essere configurato tramite il parametro `ai_model` nel file `.qmd` o tramite variabile d'ambiente.
+Il sistema utilizza una gerarchia di modelli LLM con fallback automatico. L'ordine di fallback è: **GPT-5.2 → Gemini 3 PRO → Gemini Flash 2.5 → GPT-4o**. Se un modello non è disponibile o ha la quota esaurita, il sistema prova automaticamente il modello successivo nella gerarchia.
+
+Il sistema traccia automaticamente quale modello viene utilizzato per ogni chiamata e mostra statistiche di utilizzo nella sezione "Modelli LLM Utilizzati" del report generato.
 
 ## Note
 

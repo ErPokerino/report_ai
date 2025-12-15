@@ -31,15 +31,15 @@ Questo documento descrive le colonne del dataset `lucy_data.csv` utilizzato per 
 
 ### `prediction`
 - **Tipo**: Numerico (intero) o NaN
-- **Descrizione**: Valore predetto dal sistema per il campo `id_subject` (codice fornitore)
+- **Descrizione**: Valore predetto dal sistema per il campo indicato in "field_name"
 - **Esempio**: `573444`, `571981`
 - **Note**: Può essere NaN se il sistema non ha prodotto una predizione
 
 ### `truth`
 - **Tipo**: Numerico (intero) o NaN
-- **Descrizione**: Valore reale/validato manualmente per il campo `id_subject`
+- **Descrizione**: Valore reale/validato manualmente per il campo indicato in "field_name"
 - **Esempio**: `571981`, `574070`
-- **Note**: Disponibile solo per record validati (circa 23-25% del totale)
+- **Note**: Disponibile solo per record validati
 
 ### `comparison`
 - **Tipo**: Stringa categorica o NaN

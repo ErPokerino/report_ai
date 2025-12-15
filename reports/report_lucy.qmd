@@ -12,26 +12,13 @@ params:
 #| echo: false
 #| output: asis
 
-import sys
-import os
-sys.path.append('../src')
-
-from ai_analysis import get_llm_with_fallback, get_model_display_name
 from IPython.display import Markdown, display
-
-# Determina quale modello LLM sarà utilizzato e ottieni il nome formattato
-llm_config = get_llm_with_fallback()
-if llm_config is not None:
-    model_name = llm_config.get("model_name", "gpt-5.2")
-    model_display_name = get_model_display_name(model_name)
-else:
-    model_display_name = "modelli LLM disponibili"
 
 # Costruisci il testo dell'introduzione
 intro_text = "Questo report analizza i dati del sistema Lucy, applicativo documentale per la gestione delle fatture di Luxottica. Il sistema utilizza algoritmi di riconoscimento automatico (incluso ML con XGBoost) per estrarre informazioni dalle fatture, estraendo **tutti i campi** indicati in `field_name`.\n\n"
-intro_text += "Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM (" + model_display_name + ") per fornire insights strutturati sui dati."
+intro_text += "Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM. Il sistema utilizza la seguente gerarchia di modelli con fallback automatico: **GPT-5.2 → Gemini 3 PRO → Gemini Flash 2.5 → GPT-4o**. Il modello effettivamente utilizzato per generare questo report viene indicato nella sezione 'Modelli LLM Utilizzati' alla fine del documento."
 
-print(intro_text)
+display(Markdown(intro_text))
 ```
 
 ## Caricamento Dati
@@ -748,6 +735,61 @@ if heatmap_commentary:
     display(Markdown(f"**Commento AI:** {heatmap_commentary}"))
 ```
 
+## Modelli LLM Utilizzati
+
+```{python}
+#| echo: false
+#| output: asis
+
+import sys
+sys.path.append('../src')
+
+from model_tracker import ModelTracker
+from ai_analysis import get_model_display_name, get_llm_with_fallback
+from IPython.display import Markdown, display
+
+tracker = ModelTracker()
+llm_config = get_llm_with_fallback()
+
+# Ottieni gerarchia configurata
+if llm_config:
+    fallback_models = llm_config.get("fallback_models", [])
+    hierarchy = " → ".join([get_model_display_name(m) for m in fallback_models])
+else:
+    hierarchy = "N/A"
+
+# Statistiche utilizzo
+stats = tracker.get_usage_stats()
+primary = tracker.get_primary_model()
+total_calls = tracker.get_total_calls()
+
+# Mostra informazioni
+if total_calls > 0:
+    stats_text = "\n".join([f"- **{get_model_display_name(m)}**: {c} chiamate" for m, c in sorted(stats.items(), key=lambda x: x[1], reverse=True)])
+    primary_display = get_model_display_name(primary) if primary else "Nessuna chiamata registrata"
+    
+    model_info = f"""
+**Gerarchia configurata:** {hierarchy}
+
+**Modello primario utilizzato:** {primary_display}
+
+**Statistiche utilizzo:**
+{stats_text}
+
+**Totale chiamate LLM:** {total_calls}
+"""
+else:
+    model_info = f"""
+**Gerarchia configurata:** {hierarchy}
+
+**Modello primario utilizzato:** Nessuna chiamata registrata
+
+*Nota: Le statistiche di utilizzo saranno disponibili dopo l'esecuzione delle analisi AI.*
+"""
+
+display(Markdown(model_info))
+```
+
 ## Conclusioni e Raccomandazioni
 
 ### Metriche Chiave
@@ -820,5 +862,5 @@ except Exception as e:
 from IPython.display import Markdown, display
 
 if recommendations:
-    display(Markdown("### Raccomandazioni\n\n" + recommendations))
+    display(Markdown(recommendations))
 ```

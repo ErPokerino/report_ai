@@ -74,6 +74,27 @@ except ImportError as e:
     logger.debug(f"langchain-google-genai non disponibile: {e}. Supporto Gemini disabilitato.")
     GEMINI_AVAILABLE = False
 
+# Importa ModelTracker per tracking chiamate LLM
+try:
+    from .model_tracker import ModelTracker
+except ImportError:
+    # Fallback per quando eseguito da notebook
+    try:
+        from model_tracker import ModelTracker
+    except ImportError:
+        # Se non disponibile, crea stub
+        logger.warning("ModelTracker non disponibile. Tracking modelli disabilitato.")
+        class ModelTracker:
+            def track_call(self, model_name: str, success: bool = True):
+                pass
+            def get_usage_stats(self):
+                return {}
+            def get_primary_model(self):
+                return None
+
+# Crea istanza globale del tracker
+tracker = ModelTracker()
+
 
 def get_model_display_name(model_name: Optional[str]) -> str:
     """
@@ -355,8 +376,11 @@ def _try_fallback_models(
                     timeout=API_TIMEOUT_SECONDS
                 )
                 response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+                result = _extract_text_from_response(response)
                 logger.info(f"Fallback riuscito con modello: {model}")
-                return _extract_text_from_response(response)
+                # Traccia fallback riuscito
+                tracker.track_call(model, success=True)
+                return result
             except (RateLimitError, FuturesTimeoutError) as e:
                 logger.debug(f"Errore con modello fallback {model}: {e}. Provo successivo.")
                 continue
@@ -374,8 +398,11 @@ def _try_fallback_models(
                     google_api_key=google_api_key
                 )
                 response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
+                result = _extract_text_from_response(response)
                 logger.info(f"Fallback riuscito con Gemini: {model}")
-                return _extract_text_from_response(response)
+                # Traccia fallback Gemini riuscito
+                tracker.track_call(model, success=True)
+                return result
             except Exception as e:
                 logger.debug(f"Errore con Gemini fallback {model}: {e}. Provo successivo.")
                 continue
@@ -417,7 +444,10 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
     try:
         logger.debug(f"Invio richiesta LLM con modello: {model_name}")
         response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
-        return _extract_text_from_response(response)
+        result = _extract_text_from_response(response)
+        # Traccia chiamata riuscita
+        tracker.track_call(model_name, success=True)
+        return result
     except (RateLimitError, FuturesTimeoutError) as e:
         # Se quota esaurita o timeout, prova fallback
         logger.warning(f"Errore con modello {model_name}: {e}. Tentativo fallback.")

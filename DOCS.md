@@ -119,10 +119,11 @@ flowchart TD
 - `generate_section_text()`: Genera testo per sezioni report
 
 **Caratteristiche**:
-- Fallback automatico: gpt-5.2 → gpt-4o → gpt-4-turbo → gpt-4 → gemini-3-pro
+- Fallback automatico: gpt-5.2 → gemini-3-pro-preview → gemini-2.5-flash → gpt-4o
 - Timeout configurabile (default 60s) per evitare blocchi
 - Integrazione contesto dominio dalla cartella `context/`
 - Gestione errori robusta con messaggi informativi
+- Tracking automatico dei modelli utilizzati per ogni chiamata LLM
 
 **Input**: DataFrame, descrizioni grafici, contesto
 **Output**: Testo analitico in markdown
@@ -233,6 +234,22 @@ graph LR
 - Riceve dati/grafici da altri moduli
 - Output testo integrato in report
 - Gestisce errori gracefully (messaggi informativi invece di crash)
+- Traccia automaticamente quale modello viene utilizzato per ogni chiamata
+
+### Model Tracker (`src/model_tracker.py`)
+
+**Responsabilità**: Tracking globale delle chiamate LLM utilizzate durante la generazione del report
+
+**Funzionalità principali**:
+- `track_call()`: Registra una chiamata LLM con modello utilizzato
+- `get_usage_stats()`: Restituisce statistiche di utilizzo (conteggio per modello)
+- `get_primary_model()`: Restituisce il modello più utilizzato
+- Pattern Singleton per garantire persistenza tra celle Quarto
+
+**Come interagisce**:
+- Chiamato automaticamente da `ai_analysis.py` dopo ogni chiamata LLM riuscita
+- Fornisce dati per la sezione "Modelli LLM Utilizzati" nel report
+- Permette di determinare a posteriori quale modello è stato effettivamente utilizzato
 
 ### Context Loader - Dettaglio Funzionale
 
@@ -300,8 +317,9 @@ table = format_table(metrics, caption="Metriche Performance")
 
 ### Fallback LLM
 - Se modello primario fallisce (quota/timeout), prova automaticamente modelli alternativi
-- Ordine: gpt-5.2 → gpt-4o → gpt-4-turbo → gpt-4 → gemini-3-pro
+- Ordine: gpt-5.2 → gemini-3-pro-preview → gemini-2.5-flash → gpt-4o
 - Se tutti falliscono, restituisce messaggio informativo invece di crash
+- Il sistema traccia automaticamente quale modello viene utilizzato per ogni chiamata
 
 ### Timeout API
 - Tutte le chiamate LLM hanno timeout (60s default, configurabile)
@@ -321,8 +339,8 @@ table = format_table(metrics, caption="Metriche Performance")
 ## Configurazione e Personalizzazione
 
 ### Variabili d'Ambiente
-- `OPENAI_API_KEY`: API key OpenAI (richiesta per AI)
-- `GOOGLE_API_KEY`: API key Google (opzionale, per Gemini fallback)
+- `OPENAI_API_KEY`: API key OpenAI (richiesta per modelli OpenAI: GPT-5.2, GPT-4o)
+- `GOOGLE_API_KEY`: API key Google (opzionale ma consigliata, per modelli Gemini fallback)
 - `LLM_API_TIMEOUT`: Timeout chiamate API in secondi (default: 60)
 
 ### Parametri Report
@@ -341,12 +359,14 @@ table = format_table(metrics, caption="Metriche Performance")
 - Grafici interattivi
 - Tabelle formattate
 - Commenti AI formattati in markdown
+- Sezione "Modelli LLM Utilizzati" con statistiche di utilizzo dinamiche
 
 ### Report PDF
 - Pronto per stampa/condivisione
 - Grafici ad alta risoluzione (300 DPI)
 - Layout ottimizzato per pagina
 - Tabelle e testo formattati
+- Sezione "Modelli LLM Utilizzati" con statistiche di utilizzo dinamiche
 
 ### Report RevealJS
 - Presentazione interattiva

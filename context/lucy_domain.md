@@ -2,11 +2,12 @@
 
 ## Panoramica
 
-Il sistema **Lucy** è un applicativo documentale sviluppato per **Luxottica** per la gestione automatica delle fatture. Il sistema utilizza algoritmi di riconoscimento automatico per estrarre informazioni dalle fatture, in particolare il campo `id_subject` (codice fornitore).
+Il sistema **Lucy** è un applicativo documentale sviluppato per **Luxottica** per la gestione automatica delle fatture. Il sistema utilizza algoritmi di riconoscimento automatico per estrarre informazioni dalle fatture.
 
 
 ## Terminologia
 
+- **`field_name`**: Stringa in cui viene indicato quale campo viene considerato nella riga 
 - **`id_subject`**: Codice identificativo del fornitore 
 - **`autovalidated`**: Flag che indica se il sistema ritiene che il documento possa essere autovalidato
 - **`id_company`**: Identificativo dell'azienda Luxottica
