@@ -15,10 +15,13 @@ _quarto_files/
 *.pdf
 *.pptx
 *.docx
+_freeze/              # Cache Quarto (freeze results)
+reports/*_files/      # File generati da Quarto (immagini, librerie, etc.)
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+.jupyter_cache/       # Cache Jupyter
 
 # IDE
 .vscode/
