@@ -4,6 +4,8 @@ author: "Sistema Automatico"
 params:
   dataset_path: "../data/lucy_data.csv"
   enable_ai: true
+  ai_model: null  # null = usa default (gpt-4o), altrimenti specifica modello (es. "gpt-4o-mini", "gpt-4-turbo")
+  ai_temperature: 0  # Temperatura per generazione LLM (0 = deterministico)
 ---
 
 ## Introduzione
@@ -12,13 +14,96 @@ params:
 #| echo: false
 #| output: asis
 
+import sys
+import os
+from typing import Any
+sys.path.append('../src')
+
+from ai_analysis import get_llm_with_fallback, get_model_display_name, get_ai_unavailable_message
 from IPython.display import Markdown, display
+
+# Controlli preventivi per evitare duplicati e sezioni vuote
+_used_labels = set()  # Traccia label Quarto già utilizzati per grafici
+_used_sections = set()  # Traccia titoli di sezioni già mostrati
+
+def _check_label_unique(label: str) -> str:
+    """
+    Verifica se un label Quarto è unico, altrimenti genera una variante.
+    
+    Args:
+        label: Label da verificare
+        
+    Returns:
+        Label unico (originale o variante)
+    """
+    if label not in _used_labels:
+        _used_labels.add(label)
+        return label
+    # Genera variante
+    counter = 2
+    while f"{label}-{counter}" in _used_labels:
+        counter += 1
+    unique_label = f"{label}-{counter}"
+    _used_labels.add(unique_label)
+    return unique_label
+
+def _check_section_content(title: str, content: Any) -> bool:
+    """
+    Verifica che il contenuto di una sezione non sia None o vuoto prima di mostrarlo.
+    Verifica anche che il titolo non sia già stato mostrato.
+    
+    Args:
+        title: Titolo della sezione
+        content: Contenuto da verificare
+        
+    Returns:
+        True se la sezione può essere mostrata, False altrimenti
+    """
+    # Normalizza il titolo per il confronto (rimuovi markdown formatting)
+    title_normalized = title.replace("###", "").replace("##", "").replace("#", "").strip()
+    
+    # Verifica duplicati
+    if title_normalized in _used_sections:
+        return False
+    
+    # Verifica contenuto vuoto
+    if content is None:
+        return False
+    if isinstance(content, str) and (not content.strip() or content.strip() == ""):
+        return False
+    
+    # Se passa i controlli, aggiungi ai titoli usati
+    _used_sections.add(title_normalized)
+    return True
+
+# Determina quale modello LLM sarà utilizzato e ottieni il nome formattato
+# Usa ai_model dal parametro se disponibile, altrimenti usa default
+try:
+    ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+    ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+except (NameError, AttributeError):
+    ai_model_param = None
+    ai_temp_param = 0
+
+llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+if llm_config is not None:
+    model_name = llm_config.get("model_name", "gpt-4o")
+    model_display_name = get_model_display_name(model_name)
+    fallback_models = llm_config.get("fallback_models", [])
+    # Formatta la gerarchia di fallback
+    if fallback_models:
+        hierarchy = " → ".join([get_model_display_name(m) for m in fallback_models])
+    else:
+        hierarchy = model_display_name
+else:
+    model_display_name = "modelli LLM disponibili"
+    hierarchy = "N/A (API keys non configurate)"
 
 # Costruisci il testo dell'introduzione
 intro_text = "Questo report analizza i dati del sistema Lucy, applicativo documentale per la gestione delle fatture di Luxottica. Il sistema utilizza algoritmi di riconoscimento automatico (incluso ML con XGBoost) per estrarre informazioni dalle fatture, estraendo **tutti i campi** indicati in `field_name`.\n\n"
-intro_text += "Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM. Il sistema utilizza la seguente gerarchia di modelli con fallback automatico: **GPT-5.2 → Gemini 3 PRO → Gemini Flash 2.5 → GPT-4o**. Il modello effettivamente utilizzato per generare questo report viene indicato nella sezione 'Modelli LLM Utilizzati' alla fine del documento."
+intro_text += "Le analisi e i commenti sono generati automaticamente utilizzando **LangChain** e modelli LLM. Il sistema utilizza la seguente gerarchia di modelli con fallback automatico: **" + hierarchy + "**. Se un modello non è disponibile o ha la quota esaurita, il sistema prova automaticamente il modello successivo nella gerarchia. Il modello effettivamente utilizzato per generare questo report viene indicato nella sezione 'Modello LLM Utilizzato' alla fine del documento."
 
-display(Markdown(intro_text))
+print(intro_text)
 ```
 
 ## Caricamento Dati
@@ -117,18 +202,27 @@ from IPython.display import Markdown, display
 ai_summary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        ai_summary = analyze_data_summary(df)
-    elif not enable_ai:
+    if not enable_ai:
         ai_summary = "Analisi AI disabilitata tramite parametro."
     else:
-        ai_summary = "OPENAI_API_KEY non configurata. Configura la variabile d'ambiente per abilitare l'analisi AI."
+        # Usa llm_config globale se disponibile, altrimenti ottienilo
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            ai_summary = analyze_data_summary(df)
+        else:
+            ai_summary = get_ai_unavailable_message("no_config")
 except (NameError, AttributeError) as e:
     # params non disponibile, usa default
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         ai_summary = analyze_data_summary(df)
     else:
-        ai_summary = "OPENAI_API_KEY non configurata. Configura la variabile d'ambiente per abilitare l'analisi AI."
+        ai_summary = get_ai_unavailable_message("no_config")
 except Exception as e:
     ai_summary = f"Errore nell'analisi AI: {str(e)}"
 ```
@@ -165,24 +259,35 @@ fig = plot_method_usage(df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 method_usage_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        method_counts = df['method_pred'].value_counts().to_string()
-        method_usage_commentary = generate_chart_commentary(
-            "Grafico a barre orizzontali della distribuzione dell'uso dei metodi di riconoscimento",
-            f"Distribuzione metodi:\n{method_counts}",
-            domain="document"
-        )
+    if enable_ai:
+        # Ottieni llm_config se non già disponibile globalmente
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            method_counts = df['method_pred'].value_counts().to_string()
+            method_usage_commentary = generate_chart_commentary(
+                "Grafico a barre orizzontali della distribuzione dell'uso dei metodi di riconoscimento",
+                f"Distribuzione metodi:\n{method_counts}",
+                domain="document"
+            )
+        else:
+            method_usage_commentary = None
     else:
         method_usage_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    # params non disponibile, usa default
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         method_counts = df['method_pred'].value_counts().to_string()
         method_usage_commentary = generate_chart_commentary(
             "Grafico a barre orizzontali della distribuzione dell'uso dei metodi di riconoscimento",
@@ -219,24 +324,33 @@ fig = plot_timeline_predictions(df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 timeline_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        daily_summary = df.groupby([df['datetime_sent'].dt.date, 'method_pred']).size().reset_index(name='count')
-        timeline_commentary = generate_chart_commentary(
-            "Grafico timeline delle predizioni nel tempo per metodo",
-            f"Periodo: {df['datetime_sent'].min()} - {df['datetime_sent'].max()}\nMetodi: {df['method_pred'].nunique()}",
-            domain="document"
-        )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            daily_summary = df.groupby([df['datetime_sent'].dt.date, 'method_pred']).size().reset_index(name='count')
+            timeline_commentary = generate_chart_commentary(
+                "Grafico timeline delle predizioni nel tempo per metodo",
+                f"Periodo: {df['datetime_sent'].min()} - {df['datetime_sent'].max()}\nMetodi: {df['method_pred'].nunique()}",
+                domain="document"
+            )
+        else:
+            timeline_commentary = None
     else:
         timeline_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         timeline_commentary = generate_chart_commentary(
             "Grafico timeline delle predizioni nel tempo per metodo",
             f"Periodo: {df['datetime_sent'].min()} - {df['datetime_sent'].max()}\nMetodi: {df['method_pred'].nunique()}",
@@ -294,33 +408,41 @@ for field_name in field_names:
                 digits=3
             ))
             
-            # Grafico metriche
-            fig = plot_metrics_by_method(field_metrics)
-            display(fig)
-            
-            # Commento AI per le metriche
+            # Commento AI per le metriche (grafico aggregato disponibile nella sezione "Performance Metodi")
             try:
                 enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-                if enable_ai and os.getenv("OPENAI_API_KEY"):
-                    metrics_summary = field_metrics[['method', 'precision', 'recall', 'f1', 'accuracy']].to_string()
-                    metrics_commentary = generate_chart_commentary(
-                        f"Grafico a barre delle metriche di performance per il campo {field_name}",
-                        metrics_summary,
-                        domain="document",
-                        field_name=field_name
-                    )
-                    if metrics_commentary:
-                        display(Markdown(f"**Commento AI:** {metrics_commentary}"))
+                if enable_ai:
+                    if 'llm_config' not in globals():
+                        ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+                        ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+                        llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+                    
+                    if llm_config is not None:
+                        metrics_summary = field_metrics[['method', 'precision', 'recall', 'f1', 'accuracy']].to_string()
+                        metrics_commentary = generate_chart_commentary(
+                            f"Grafico a barre delle metriche di performance per il campo {field_name}",
+                            metrics_summary,
+                            domain="document",
+                            field_name=field_name
+                        )
+                        if metrics_commentary:
+                            display(Markdown(f"**Commento AI:** {metrics_commentary}"))
             except Exception:
                 pass
     
     # Analisi AI specifica per questo campo
     try:
         enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-        if enable_ai and os.getenv("OPENAI_API_KEY"):
-            field_ai_summary = analyze_data_summary(field_df, field_name=field_name)
-            if field_ai_summary:
-                display(Markdown(f"**Analisi AI per {field_name}:**\n\n{field_ai_summary}"))
+        if enable_ai:
+            if 'llm_config' not in globals():
+                ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+                ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+                llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+            
+            if llm_config is not None:
+                field_ai_summary = analyze_data_summary(field_df, field_name=field_name)
+                if field_ai_summary:
+                    display(Markdown(f"**Analisi AI per {field_name}:**\n\n{field_ai_summary}"))
     except Exception:
         pass
     
@@ -380,24 +502,33 @@ fig = plot_metrics_by_method(metrics_df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 metrics_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        metrics_summary = metrics_df[['method', 'precision', 'recall', 'f1', 'accuracy']].to_string()
-        metrics_commentary = generate_chart_commentary(
-            "Grafico a barre delle metriche di performance (precision, recall, F1, accuracy) per metodo di riconoscimento",
-            metrics_summary,
-            domain="document"
-        )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            metrics_summary = metrics_df[['method', 'precision', 'recall', 'f1', 'accuracy']].to_string()
+            metrics_commentary = generate_chart_commentary(
+                "Grafico a barre delle metriche di performance (precision, recall, F1, accuracy) per metodo di riconoscimento",
+                metrics_summary,
+                domain="document"
+            )
+        else:
+            metrics_commentary = None
     else:
         metrics_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         metrics_summary = metrics_df[['method', 'precision', 'recall', 'f1', 'accuracy']].to_string()
         metrics_commentary = generate_chart_commentary(
             "Grafico a barre delle metriche di performance (precision, recall, F1, accuracy) per metodo di riconoscimento",
@@ -434,29 +565,38 @@ fig = plot_ml_vs_query_comparison(metrics_df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 ml_vs_query_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        type_metrics = metrics_df.groupby('method_type').agg({
-            'precision': 'mean',
-            'recall': 'mean',
-            'f1': 'mean',
-            'accuracy': 'mean'
-        }).to_string()
-        ml_vs_query_commentary = generate_chart_commentary(
-            "Confronto performance tra metodi ML, Query-based e Other",
-            type_metrics,
-            domain="document"
-        )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            type_metrics = metrics_df.groupby('method_type').agg({
+                'precision': 'mean',
+                'recall': 'mean',
+                'f1': 'mean',
+                'accuracy': 'mean'
+            }).to_string()
+            ml_vs_query_commentary = generate_chart_commentary(
+                "Confronto performance tra metodi ML, Query-based e Other",
+                type_metrics,
+                domain="document"
+            )
+        else:
+            ml_vs_query_commentary = None
     else:
         ml_vs_query_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         type_metrics = metrics_df.groupby('method_type').agg({
             'precision': 'mean',
             'recall': 'mean',
@@ -532,29 +672,38 @@ fig = plot_confusion_matrix_by_method(df, 'azure_model')
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 confusion_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        method_data = df[(df['method_pred'] == 'azure_model') & (df['is_validated'])]
-        if len(method_data) > 0:
-            tp = len(method_data[method_data['comparison'] == 'TP'])
-            fp = len(method_data[method_data['comparison'] == 'FP'])
-            fn = len(method_data[method_data['comparison'] == 'FN'])
-            tn = len(method_data[method_data['comparison'] == 'TN'])
-            confusion_commentary = generate_chart_commentary(
-                "Matrice di confusione per Azure Model (ML/XGBoost)",
-                f"TP={tp}, FP={fp}, FN={fn}, TN={tn}",
-                domain="document"
-            )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            method_data = df[(df['method_pred'] == 'azure_model') & (df['is_validated'])]
+            if len(method_data) > 0:
+                tp = len(method_data[method_data['comparison'] == 'TP'])
+                fp = len(method_data[method_data['comparison'] == 'FP'])
+                fn = len(method_data[method_data['comparison'] == 'FN'])
+                tn = len(method_data[method_data['comparison'] == 'TN'])
+                confusion_commentary = generate_chart_commentary(
+                    "Matrice di confusione per Azure Model (ML/XGBoost)",
+                    f"TP={tp}, FP={fp}, FN={fn}, TN={tn}",
+                    domain="document"
+                )
+        else:
+            confusion_commentary = None
     else:
         confusion_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         method_data = df[(df['method_pred'] == 'azure_model') & (df['is_validated'])]
         if len(method_data) > 0:
             tp = len(method_data[method_data['comparison'] == 'TP'])
@@ -582,24 +731,31 @@ if confusion_commentary:
 #| code-fold: true
 #| warning: false
 
-import os
-from ai_analysis import analyze_error_patterns
+from ai_analysis import analyze_error_patterns, get_llm_with_fallback, get_ai_unavailable_message
 from IPython.display import Markdown, display
 
 error_analysis = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        error_analysis = analyze_error_patterns(df)
-    elif not enable_ai:
+    if not enable_ai:
         error_analysis = "Analisi AI disabilitata tramite parametro."
     else:
-        error_analysis = "Analisi AI non disponibile."
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            error_analysis = analyze_error_patterns(df)
+        else:
+            error_analysis = get_ai_unavailable_message("no_config")
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         error_analysis = analyze_error_patterns(df)
     else:
-        error_analysis = "Analisi AI non disponibile."
+        error_analysis = get_ai_unavailable_message("no_config")
 except Exception as e:
     error_analysis = f"Errore: {str(e)}"
 ```
@@ -636,26 +792,35 @@ fig = plot_confidence_distribution(df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 confidence_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        df_with_conf = df[df['confidence'].notna()]
-        if len(df_with_conf) > 0:
-            conf_summary = f"Media confidence: {df_with_conf['confidence'].mean():.3f}\nStd: {df_with_conf['confidence'].std():.3f}"
-            confidence_commentary = generate_chart_commentary(
-                "Distribuzione della confidence per metodo (box plot)",
-                conf_summary,
-                domain="document"
-            )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            df_with_conf = df[df['confidence'].notna()]
+            if len(df_with_conf) > 0:
+                conf_summary = f"Media confidence: {df_with_conf['confidence'].mean():.3f}\nStd: {df_with_conf['confidence'].std():.3f}"
+                confidence_commentary = generate_chart_commentary(
+                    "Distribuzione della confidence per metodo (box plot)",
+                    conf_summary,
+                    domain="document"
+                )
+        else:
+            confidence_commentary = None
     else:
         confidence_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         df_with_conf = df[df['confidence'].notna()]
         if len(df_with_conf) > 0:
             conf_summary = f"Media confidence: {df_with_conf['confidence'].mean():.3f}\nStd: {df_with_conf['confidence'].std():.3f}"
@@ -696,27 +861,36 @@ fig = plot_accuracy_heatmap(df)
 #| warning: false
 #| output: asis
 
-import os
-from ai_analysis import generate_chart_commentary
+from ai_analysis import generate_chart_commentary, get_llm_with_fallback
 from IPython.display import Markdown, display
 
 heatmap_commentary = None
 try:
     enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
-    if enable_ai and os.getenv("OPENAI_API_KEY"):
-        validated = df[df['is_validated']].copy()
-        if len(validated) > 0:
-            countries = validated['country'].dropna().unique()
-            methods = validated['method_pred'].dropna().unique()
-            heatmap_commentary = generate_chart_commentary(
-                "Heatmap dell'accuratezza per country e metodo",
-                f"Countries: {len(countries)}, Metodi: {len(methods)}",
-                domain="document"
-            )
+    if enable_ai:
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            validated = df[df['is_validated']].copy()
+            if len(validated) > 0:
+                countries = validated['country'].dropna().unique()
+                methods = validated['method_pred'].dropna().unique()
+                heatmap_commentary = generate_chart_commentary(
+                    "Heatmap dell'accuratezza per country e metodo",
+                    f"Countries: {len(countries)}, Metodi: {len(methods)}",
+                    domain="document"
+                )
+        else:
+            heatmap_commentary = None
     else:
         heatmap_commentary = None
 except (NameError, AttributeError):
-    if os.getenv("OPENAI_API_KEY"):
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         validated = df[df['is_validated']].copy()
         if len(validated) > 0:
             countries = validated['country'].dropna().unique()
@@ -735,7 +909,7 @@ if heatmap_commentary:
     display(Markdown(f"**Commento AI:** {heatmap_commentary}"))
 ```
 
-## Modelli LLM Utilizzati
+## Modello LLM Utilizzato
 
 ```{python}
 #| echo: false
@@ -744,50 +918,43 @@ if heatmap_commentary:
 import sys
 sys.path.append('../src')
 
-from model_tracker import ModelTracker
-from ai_analysis import get_model_display_name, get_llm_with_fallback
+from ai_analysis import get_last_used_model, get_model_display_name, get_llm_with_fallback
 from IPython.display import Markdown, display
 
-tracker = ModelTracker()
+# Ottieni informazioni sul modello utilizzato
+used_model_info = get_last_used_model()
 llm_config = get_llm_with_fallback()
 
-# Ottieni gerarchia configurata
-if llm_config:
-    fallback_models = llm_config.get("fallback_models", [])
-    hierarchy = " → ".join([get_model_display_name(m) for m in fallback_models])
-else:
-    hierarchy = "N/A"
-
-# Statistiche utilizzo
-stats = tracker.get_usage_stats()
-primary = tracker.get_primary_model()
-total_calls = tracker.get_total_calls()
-
-# Mostra informazioni
-if total_calls > 0:
-    stats_text = "\n".join([f"- **{get_model_display_name(m)}**: {c} chiamate" for m, c in sorted(stats.items(), key=lambda x: x[1], reverse=True)])
-    primary_display = get_model_display_name(primary) if primary else "Nessuna chiamata registrata"
+if used_model_info:
+    model_name = used_model_info.get("model_name")
+    provider = used_model_info.get("provider", "unknown")
+    model_display = get_model_display_name(model_name)
+    provider_display = "OpenAI" if provider == "openai" else "Google" if provider == "google" else provider
     
-    model_info = f"""
-**Gerarchia configurata:** {hierarchy}
+    model_info_text = f"""
+**Modello utilizzato:** {model_display}
 
-**Modello primario utilizzato:** {primary_display}
+**Provider:** {provider_display}
 
-**Statistiche utilizzo:**
-{stats_text}
-
-**Totale chiamate LLM:** {total_calls}
+Il modello è stato selezionato automaticamente dalla gerarchia di fallback configurata in base alla disponibilità e alle quote API.
 """
 else:
-    model_info = f"""
+    # Se nessun modello è stato utilizzato, mostra la gerarchia configurata
+    if llm_config is not None:
+        fallback_models = llm_config.get("fallback_models", [])
+        if fallback_models:
+            hierarchy = " → ".join([get_model_display_name(m) for m in fallback_models])
+            model_info_text = f"""
 **Gerarchia configurata:** {hierarchy}
 
-**Modello primario utilizzato:** Nessuna chiamata registrata
-
-*Nota: Le statistiche di utilizzo saranno disponibili dopo l'esecuzione delle analisi AI.*
+*Nota: Nessuna chiamata LLM è stata effettuata durante la generazione di questo report. Le analisi AI potrebbero essere state disabilitate o non disponibili.*
 """
+        else:
+            model_info_text = "*Nessuna informazione disponibile sul modello LLM utilizzato.*"
+    else:
+        model_info_text = "*Analisi AI non disponibile: API keys non configurate.*"
 
-display(Markdown(model_info))
+display(Markdown(model_info_text))
 ```
 
 ## Conclusioni e Raccomandazioni
@@ -833,11 +1000,41 @@ if len(ml_metrics) > 0 and len(query_metrics) > 0:
 #| code-fold: true
 #| warning: false
 
-from ai_analysis import generate_section_text
+from ai_analysis import generate_section_text, get_llm_with_fallback, get_ai_unavailable_message
 
 recommendations = None
 try:
-    if os.getenv("OPENAI_API_KEY"):
+    enable_ai = params.enable_ai if hasattr(params, 'enable_ai') else True
+    if not enable_ai:
+        recommendations = None  # Non mostrare sezione se AI disabilitata
+    else:
+        # Usa llm_config globale se disponibile, altrimenti ottienilo
+        if 'llm_config' not in globals():
+            ai_model_param = params.ai_model if hasattr(params, 'ai_model') and params.ai_model else None
+            ai_temp_param = params.ai_temperature if hasattr(params, 'ai_temperature') else 0
+            llm_config = get_llm_with_fallback(primary_model=ai_model_param, temperature=ai_temp_param) if ai_model_param else get_llm_with_fallback(temperature=ai_temp_param)
+        
+        if llm_config is not None:
+            context = f"""
+Metriche calcolate:
+{metrics_df[['method', 'method_type', 'precision', 'recall', 'f1', 'accuracy']].to_string()}
+
+Errori totali: FP={len(validated[validated['comparison'] == 'FP'])}, FN={len(validated[validated['comparison'] == 'FN'])}
+"""
+            recommendations = generate_section_text(
+                "Raccomandazioni per il miglioramento del sistema di riconoscimento documentale",
+                context
+            )
+            # Verifica che il contenuto non sia vuoto
+            if recommendations and (not recommendations.strip() or recommendations.strip() == ""):
+                recommendations = None
+        else:
+            recommendations = None  # Non mostrare sezione se AI non disponibile
+except (NameError, AttributeError):
+    # params non disponibile, usa default
+    if 'llm_config' not in globals():
+        llm_config = get_llm_with_fallback()
+    if llm_config is not None:
         context = f"""
 Metriche calcolate:
 {metrics_df[['method', 'method_type', 'precision', 'recall', 'f1', 'accuracy']].to_string()}
@@ -848,10 +1045,12 @@ Errori totali: FP={len(validated[validated['comparison'] == 'FP'])}, FN={len(val
             "Raccomandazioni per il miglioramento del sistema di riconoscimento documentale",
             context
         )
+        if recommendations and (not recommendations.strip() or recommendations.strip() == ""):
+            recommendations = None
     else:
-        recommendations = "Analisi AI non disponibile per le raccomandazioni."
+        recommendations = None
 except Exception as e:
-    recommendations = f"Errore: {str(e)}"
+    recommendations = None  # Non mostrare sezione in caso di errore
 ```
 
 ```{python}
@@ -861,6 +1060,7 @@ except Exception as e:
 
 from IPython.display import Markdown, display
 
-if recommendations:
+# Mostra sezione solo se il contenuto non è vuoto
+if recommendations and recommendations.strip():
     display(Markdown(recommendations))
 ```

@@ -9,6 +9,25 @@ import time
 from pathlib import Path
 from typing import Optional, List, Union
 
+# Carica variabili d'ambiente da file env (es. .env) prima di lanciare Quarto,
+# così il processo `quarto render` eredita le API keys.
+try:
+    from dotenv import load_dotenv, find_dotenv
+
+    _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    for _name in [".env", "-env"]:
+        _p = _PROJECT_ROOT / _name
+        if _p.exists():
+            load_dotenv(dotenv_path=_p, override=False)
+
+    _found = find_dotenv(usecwd=True)
+    if _found:
+        load_dotenv(dotenv_path=_found, override=False)
+except Exception:
+    # Se python-dotenv non è disponibile o qualcosa va storto, continuiamo comunque:
+    # il report può essere renderizzato anche senza AI.
+    pass
+
 # Costanti
 SUPPORTED_FORMATS = ['html', 'pdf', 'revealjs', 'all']
 DEFAULT_FORMAT = 'html'

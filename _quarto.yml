@@ -37,9 +37,9 @@ format:
 execute:
   echo: false
   warning: false
-  freeze: false
+  freeze: auto  # Esegue solo celle modificate o con dipendenze cambiate
   keep-ipynb: false
-  cache: false
+  cache: true  # Abilita cache per ridurre chiamate LLM ripetute
 
 jupyter: python3
 

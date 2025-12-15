@@ -1,13 +1,14 @@
 """
 Modulo per l'integrazione con LangChain per analisi AI.
 """
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 import pandas as pd
 import os
 import sys
-from typing import Dict, List, Optional, Any, Union
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Union, Tuple
 from openai import RateLimitError
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import logging
@@ -19,8 +20,37 @@ except ImportError:
     # Fallback per quando eseguito da notebook
     from data_loader import calculate_percentage
 
-# Carica variabili d'ambiente da .env
-load_dotenv()
+# Carica variabili d'ambiente da file env (es. .env) in modo robusto rispetto alla working directory
+def _load_env() -> None:
+    """
+    Carica variabili d'ambiente da `.env` (o `-env`) nella root del progetto.
+
+    Nota: con Quarto la working directory può variare; quindi non ci affidiamo
+    solo al lookup dal CWD.
+    """
+    try:
+        project_root = Path(__file__).resolve().parents[1]
+        for name in [".env", "-env"]:
+            p = project_root / name
+            if p.exists():
+                load_dotenv(dotenv_path=p, override=False)
+    except Exception:
+        pass
+
+    # Fallback: cerca verso l'alto a partire dal CWD (se disponibile)
+    try:
+        found = find_dotenv(usecwd=True)
+        if found:
+            load_dotenv(dotenv_path=found, override=False)
+    except Exception:
+        pass
+
+
+_load_env()
+
+# Tracking modello utilizzato (globale per persistenza tra celle Quarto)
+_last_used_model: Optional[str] = None
+_last_used_provider: Optional[str] = None
 
 # Configurazione logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -44,7 +74,9 @@ API_TIMEOUT_SECONDS = int(os.getenv("LLM_API_TIMEOUT", "60"))
 # Costanti
 GEMINI_MODEL = "gemini-3-pro-preview"
 GEMINI_FLASH_MODEL = "gemini-2.5-flash"
-DEFAULT_MODEL = "gpt-5.2"
+# Default model: usa gpt-5.2 come default
+# Può essere sovrascritto tramite OPENAI_MODEL env var o parametro ai_model nel QMD
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2")
 DEFAULT_TEMPERATURE = 0
 
 # Importa il modulo per caricare il contesto
@@ -74,27 +106,6 @@ except ImportError as e:
     logger.debug(f"langchain-google-genai non disponibile: {e}. Supporto Gemini disabilitato.")
     GEMINI_AVAILABLE = False
 
-# Importa ModelTracker per tracking chiamate LLM
-try:
-    from .model_tracker import ModelTracker
-except ImportError:
-    # Fallback per quando eseguito da notebook
-    try:
-        from model_tracker import ModelTracker
-    except ImportError:
-        # Se non disponibile, crea stub
-        logger.warning("ModelTracker non disponibile. Tracking modelli disabilitato.")
-        class ModelTracker:
-            def track_call(self, model_name: str, success: bool = True):
-                pass
-            def get_usage_stats(self):
-                return {}
-            def get_primary_model(self):
-                return None
-
-# Crea istanza globale del tracker
-tracker = ModelTracker()
-
 
 def get_model_display_name(model_name: Optional[str]) -> str:
     """
@@ -112,11 +123,12 @@ def get_model_display_name(model_name: Optional[str]) -> str:
     model_map = {
         "gpt-5.2": "GPT-5.2",
         "gpt-4o": "GPT-4o",
+        "gpt-4o-mini": "GPT-4o Mini",
         "gpt-4-turbo": "GPT-4 Turbo",
         "gpt-4": "GPT-4",
+        "gpt-3.5-turbo": "GPT-3.5 Turbo",
         "gemini-3-pro-preview": "Gemini 3 PRO",
         "gemini-3-pro": "Gemini 3 PRO",
-        "gemini-2.5-flash": "Gemini Flash 2.5",
     }
     return model_map.get(model_name, model_name.upper().replace("-", " "))
 
@@ -145,10 +157,10 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
     """
     Inizializza LLM con fallback a modelli alternativi se quota esaurita.
     
-    Ordine di fallback: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash -> gpt-4o
+    Ordine di fallback: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash
     
     Args:
-        primary_model: Modello principale da provare (default: gpt-5.2)
+        primary_model: Modello principale da provare (default: gpt-5.2, può essere sovrascritto via OPENAI_MODEL env var)
         temperature: Temperatura per la generazione
         
     Returns:
@@ -161,7 +173,7 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
     if (not openai_api_key or openai_api_key.strip() == "") and (not google_api_key or google_api_key.strip() == ""):
         return None
     
-    # Ordine di fallback richiesto: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash -> gpt-4o
+    # Ordine di fallback: gpt-5.2 -> gemini-3-pro-preview -> gemini-2.5-flash
     fallback_models = ["gpt-5.2"]
     
     # Aggiungi Gemini se disponibile
@@ -169,16 +181,12 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
         fallback_models.append(GEMINI_MODEL)
         fallback_models.append(GEMINI_FLASH_MODEL)
     
-    # Aggiungi GPT-4o
-    fallback_models.append("gpt-4o")
-    
     # Se il modello primario non è nella lista, aggiungilo all'inizio
     if primary_model not in fallback_models:
         fallback_models.insert(0, primary_model)
     else:
         # Riordina per avere primary_model come primo
-        if primary_model in fallback_models:
-            fallback_models.remove(primary_model)
+        fallback_models.remove(primary_model)
         fallback_models.insert(0, primary_model)
     
     # Prova ogni modello nell'ordine specificato
@@ -189,12 +197,14 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
         # Prova OpenAI
         if not is_gemini and openai_api_key and openai_api_key.strip() != "":
             try:
+                # Prova a inizializzare il modello OpenAI con timeout
                 llm = ChatOpenAI(
                     model=model,
                     temperature=temperature,
                     api_key=openai_api_key,
                     timeout=API_TIMEOUT_SECONDS
                 )
+                # Se l'inizializzazione riesce, restituisci la configurazione
                 return {
                     "model_name": model, 
                     "temperature": temperature, 
@@ -204,15 +214,18 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
                     "provider": "openai"
                 }
             except RateLimitError as e:
+                # Se quota esaurita, prova il modello successivo
                 logger.debug(f"RateLimitError per modello {model}: {e}. Provo modello successivo.")
                 continue
             except Exception as e:
+                # Per altri errori, prova comunque il modello successivo
                 logger.debug(f"Errore inizializzazione modello {model}: {e}. Provo modello successivo.")
                 continue
         
         # Prova Gemini
         elif is_gemini and GEMINI_AVAILABLE and google_api_key and google_api_key.strip() != "":
             try:
+                # Prova a inizializzare Gemini
                 llm = ChatGoogleGenerativeAI(
                     model=model,
                     temperature=temperature,
@@ -232,6 +245,100 @@ def get_llm_with_fallback(primary_model: str = DEFAULT_MODEL, temperature: float
     
     # Se tutti i modelli falliscono, restituisci None
     return None
+
+
+def _classify_llm_error(error: Exception) -> str:
+    """
+    Classifica un errore LLM per fornire un messaggio diagnostico accurato.
+    
+    Args:
+        error: Eccezione catturata durante una chiamata LLM
+        
+    Returns:
+        Stringa descrittiva del tipo di errore (senza informazioni sensibili)
+    """
+    error_str = str(error).lower()
+    error_type = type(error).__name__
+    
+    # Rate limit / quota esaurita
+    if isinstance(error, RateLimitError) or "rate limit" in error_str or "quota" in error_str:
+        return "quota_esaurita"
+    
+    # Timeout
+    if isinstance(error, FuturesTimeoutError) or "timeout" in error_str:
+        return "timeout"
+    
+    # Autenticazione / API key
+    if "api key" in error_str or "authentication" in error_str or "unauthorized" in error_str or "401" in error_str:
+        return "auth_error"
+    
+    # Model not found / invalid model
+    if "model" in error_str and ("not found" in error_str or "invalid" in error_str or "does not exist" in error_str or "404" in error_str):
+        return "model_not_found"
+    
+    # Network / connection
+    if "connection" in error_str or "network" in error_str or "dns" in error_str or "resolve" in error_str:
+        return "network_error"
+    
+    # Permission / access denied
+    if "permission" in error_str or "forbidden" in error_str or "403" in error_str:
+        return "permission_error"
+    
+    # Default: errore generico
+    return "errore_generico"
+
+
+def get_last_used_model() -> Optional[Dict[str, str]]:
+    """
+    Restituisce informazioni sul modello LLM utilizzato durante la generazione del report.
+    
+    Returns:
+        Dizionario con 'model_name' e 'provider', o None se nessun modello è stato utilizzato
+    """
+    global _last_used_model, _last_used_provider
+    if _last_used_model is None:
+        return None
+    return {
+        "model_name": _last_used_model,
+        "provider": _last_used_provider or "unknown"
+    }
+
+
+def get_ai_unavailable_message(reason: str = "unknown") -> str:
+    """
+    Restituisce un messaggio diagnostico per AI non disponibile basato sulla ragione.
+    
+    Args:
+        reason: Tipo di errore (da _classify_llm_error) o "no_config" se API key mancante
+        
+    Returns:
+        Messaggio diagnostico user-friendly
+    """
+    return _get_ai_unavailable_message(reason)
+
+
+def _get_ai_unavailable_message(reason: str = "unknown") -> str:
+    """
+    Restituisce un messaggio diagnostico per AI non disponibile basato sulla ragione.
+    
+    Args:
+        reason: Tipo di errore (da _classify_llm_error) o "no_config" se API key mancante
+        
+    Returns:
+        Messaggio diagnostico user-friendly
+    """
+    messages = {
+        "no_config": "Analisi AI non disponibile: API key non configurata. Configura OPENAI_API_KEY nel file .env per abilitare l'analisi AI.",
+        "quota_esaurita": "Analisi AI non disponibile: quota esaurita per tutti i modelli disponibili. Riprova più tardi o verifica il tuo piano API.",
+        "timeout": "Analisi AI non disponibile: timeout durante la chiamata API. Verifica la connessione o aumenta LLM_API_TIMEOUT.",
+        "auth_error": "Analisi AI non disponibile: errore di autenticazione. Verifica che OPENAI_API_KEY sia valida e non scaduta.",
+        "model_not_found": "Analisi AI non disponibile: modello richiesto non trovato o non disponibile. Verifica il nome del modello configurato.",
+        "network_error": "Analisi AI non disponibile: errore di connessione di rete. Verifica la connessione internet.",
+        "permission_error": "Analisi AI non disponibile: permessi insufficienti per accedere al modello. Verifica le impostazioni del tuo account API.",
+        "errore_generico": "Analisi AI non disponibile: errore durante l'inizializzazione o la chiamata API.",
+        "unknown": "Analisi AI non disponibile: motivo sconosciuto."
+    }
+    return messages.get(reason, messages["unknown"])
 
 
 def _extract_text_from_response(response: Any) -> str:
@@ -360,6 +467,8 @@ def _try_fallback_models(
     Returns:
         Risposta LLM o None se tutti i modelli falliscono
     """
+    global _last_used_model, _last_used_provider
+    
     # Prova modelli successivi nell'ordine specificato
     for model in fallback_models[current_index + 1:]:
         # Determina se è un modello OpenAI o Gemini
@@ -376,11 +485,11 @@ def _try_fallback_models(
                     timeout=API_TIMEOUT_SECONDS
                 )
                 response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
-                result = _extract_text_from_response(response)
                 logger.info(f"Fallback riuscito con modello: {model}")
-                # Traccia fallback riuscito
-                tracker.track_call(model, success=True)
-                return result
+                # Aggiorna tracking modello utilizzato
+                _last_used_model = model
+                _last_used_provider = "openai"
+                return _extract_text_from_response(response)
             except (RateLimitError, FuturesTimeoutError) as e:
                 logger.debug(f"Errore con modello fallback {model}: {e}. Provo successivo.")
                 continue
@@ -398,11 +507,11 @@ def _try_fallback_models(
                     google_api_key=google_api_key
                 )
                 response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
-                result = _extract_text_from_response(response)
                 logger.info(f"Fallback riuscito con Gemini: {model}")
-                # Traccia fallback Gemini riuscito
-                tracker.track_call(model, success=True)
-                return result
+                # Aggiorna tracking modello utilizzato
+                _last_used_model = model
+                _last_used_provider = "google"
+                return _extract_text_from_response(response)
             except Exception as e:
                 logger.debug(f"Errore con Gemini fallback {model}: {e}. Provo successivo.")
                 continue
@@ -410,7 +519,7 @@ def _try_fallback_models(
     return None
 
 
-def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) -> Optional[str]:
+def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Invoca LLM con fallback automatico se si verifica RateLimitError o timeout.
     
@@ -419,10 +528,14 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
         prompt: Prompt da inviare all'LLM
         
     Returns:
-        Risposta dell'LLM, o None se tutti i modelli falliscono
+        Tupla (risposta_llm, error_reason):
+        - risposta_llm: Risposta dell'LLM se successo, None altrimenti
+        - error_reason: None se successo, altrimenti tipo di errore (per messaggi diagnostici)
     """
+    global _last_used_model, _last_used_provider
+    
     if llm_config is None:
-        return None
+        return None, "no_config"
     
     # Ottieni llm e lista di fallback
     llm = llm_config.get("llm")
@@ -441,17 +554,22 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
     temperature = llm_config.get("temperature", DEFAULT_TEMPERATURE)
     
     # Prova prima con il modello corrente
+    last_error = None
+    last_error_type = None
     try:
         logger.debug(f"Invio richiesta LLM con modello: {model_name}")
         response = _invoke_with_timeout(llm, [HumanMessage(content=prompt)])
-        result = _extract_text_from_response(response)
-        # Traccia chiamata riuscita
-        tracker.track_call(model_name, success=True)
-        return result
+        logger.info(f"Chiamata LLM riuscita con modello: {model_name}")
+        # Aggiorna tracking modello utilizzato
+        _last_used_model = model_name
+        _last_used_provider = provider
+        return _extract_text_from_response(response), None
     except (RateLimitError, FuturesTimeoutError) as e:
         # Se quota esaurita o timeout, prova fallback
+        last_error = e
+        last_error_type = _classify_llm_error(e)
         logger.warning(f"Errore con modello {model_name}: {e}. Tentativo fallback.")
-        return _try_fallback_models(
+        result = _try_fallback_models(
             fallback_models,
             current_model_index,
             prompt,
@@ -459,12 +577,18 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
             os.getenv("OPENAI_API_KEY"),
             os.getenv("GOOGLE_API_KEY")
         )
+        if result is not None:
+            return result, None
+        # Se fallback fallisce, restituisci l'errore originale
+        return None, last_error_type
     except Exception as e:
         # Altri errori: se è OpenAI, prova fallback; se è già Gemini, restituisci None
+        last_error = e
+        last_error_type = _classify_llm_error(e)
         logger.warning(f"Errore generico con modello {model_name}: {e}")
         if provider == "openai":
             logger.info("Tentativo fallback per errore OpenAI")
-            return _try_fallback_models(
+            result = _try_fallback_models(
                 fallback_models,
                 current_model_index,
                 prompt,
@@ -472,8 +596,10 @@ def invoke_llm_with_fallback(llm_config: Optional[Dict[str, Any]], prompt: str) 
                 os.getenv("OPENAI_API_KEY"),
                 os.getenv("GOOGLE_API_KEY")
             )
-        logger.error(f"Errore con Gemini, nessun fallback disponibile")
-        return None
+            if result is not None:
+                return result, None
+        logger.error(f"Errore con {provider}, nessun fallback disponibile")
+        return None, last_error_type
 
 
 def analyze_data_summary(df: pd.DataFrame, field_name: Optional[str] = None) -> str:
@@ -489,7 +615,7 @@ def analyze_data_summary(df: pd.DataFrame, field_name: Optional[str] = None) -> 
     """
     llm_config = get_llm_with_fallback()
     if llm_config is None:
-        return "Analisi AI non disponibile (API key non configurata o tutti i modelli hanno quota esaurita)."
+        return _get_ai_unavailable_message("no_config")
     
     try:
         # Prepara statistiche descrittive
@@ -578,14 +704,15 @@ IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quand
 """
         
         # Usa la funzione con fallback automatico
-        result = invoke_llm_with_fallback(llm_config, prompt)
-        if result is not None:
+        result, error_reason = invoke_llm_with_fallback(llm_config, prompt)
+        if result is not None and result.strip():
             return result
         else:
-            return "Analisi AI non disponibile (quota esaurita per tutti i modelli disponibili)."
+            return _get_ai_unavailable_message(error_reason or "unknown")
     except Exception as e:
-        # Se c'è un errore durante l'inizializzazione, restituisci un messaggio di fallback
-        return f"Analisi AI non disponibile (errore inizializzazione: {str(e)[:100]})."
+        # Se c'è un errore durante l'inizializzazione, classifica l'errore
+        error_type = _classify_llm_error(e)
+        return _get_ai_unavailable_message(error_type)
 
 
 def generate_chart_commentary(
@@ -648,7 +775,11 @@ IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quand
 """
     
     # Usa la funzione con fallback automatico
-    return invoke_llm_with_fallback(llm_config, prompt)
+    result, _ = invoke_llm_with_fallback(llm_config, prompt)
+    # Verifica che il risultato non sia vuoto
+    if result and result.strip():
+        return result
+    return None
 
 
 def analyze_error_patterns(df: pd.DataFrame, field_name: Optional[str] = None) -> Optional[str]:
@@ -732,7 +863,11 @@ IMPORTANTE: Usa markdown per la formattazione (elenchi, corsivo, grassetto quand
 """
     
     # Usa la funzione con fallback automatico
-    return invoke_llm_with_fallback(llm_config, prompt)
+    result, _ = invoke_llm_with_fallback(llm_config, prompt)
+    # Verifica che il risultato non sia vuoto
+    if result and result.strip():
+        return result
+    return None
 
 
 def generate_section_text(section_topic: str, data_context: str) -> Optional[str]:
@@ -773,4 +908,8 @@ IMPORTANTE: Scrivi solo testo normale, senza asterischi, cancelletto o altri sim
 """
     
     # Usa la funzione con fallback automatico
-    return invoke_llm_with_fallback(llm_config, prompt)
+    result, _ = invoke_llm_with_fallback(llm_config, prompt)
+    # Verifica che il risultato non sia vuoto
+    if result and result.strip():
+        return result
+    return None
